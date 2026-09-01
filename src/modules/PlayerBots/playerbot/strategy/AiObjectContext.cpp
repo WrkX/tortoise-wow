@@ -12,6 +12,7 @@
 #include "actions/WorldPacketActionContext.h"
 #include "values/ValueContext.h"
 #include "values/SharedValueContext.h"
+#include "playerbot/PlayerbotAiExtension.h"
 
 
 using namespace ai;
@@ -35,6 +36,9 @@ AiObjectContext::AiObjectContext(PlayerbotAI* ai) : PlayerbotAIAware(ai)
     valueContexts.Add(new ValueContext());
 
     //valueContexts.Add(&sSharedValueContext);
+
+    // Optional modules (DungeonClear, …) append their contexts here.
+    sPlayerbotAiExtension.ApplyToContext(this);
 }
 
 void AiObjectContext::ClearValues(std::string findName)
@@ -50,6 +54,34 @@ void AiObjectContext::ClearValues(std::string findName)
             continue;
 
         valueContexts.Erase(*i);
+    }
+}
+
+bool AiObjectContext::InvalidateValue(const std::string& name)
+{
+    UntypedValue* value = FindUntypedValue(name);
+    if (!value)
+        return false;
+
+    value->Reset();
+    return true;
+}
+
+void AiObjectContext::InvalidateCombatTargetValues()
+{
+    static const char* const targetValues[] =
+    {
+        "distance::current target",
+        "facing::current target",
+        "moving::current target",
+        "behind::current target",
+        "invalid target::current target",
+        "dead::current target"
+    };
+
+    for (const char* valueName : targetValues)
+    {
+        InvalidateValue(valueName);
     }
 }
 

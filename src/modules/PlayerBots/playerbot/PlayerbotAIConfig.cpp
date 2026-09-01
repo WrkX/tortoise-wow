@@ -23,6 +23,25 @@
 #include <sstream>
 #include "PlayerbotLoginMgr.h"
 
+namespace
+{
+    constexpr int COMMAND_SERVER_DEFAULT_MAX_CLIENTS = 16;
+    constexpr int COMMAND_SERVER_HARD_MAX_CLIENTS = 64;
+    constexpr int COMMAND_SERVER_DEFAULT_MAX_LINE_LENGTH = 4096;
+    constexpr int COMMAND_SERVER_HARD_MAX_LINE_LENGTH = 64 * 1024;
+    constexpr int COMMAND_SERVER_DEFAULT_MAX_RESPONSE_LENGTH = 64 * 1024;
+    constexpr int COMMAND_SERVER_HARD_MAX_RESPONSE_LENGTH = 1024 * 1024;
+    constexpr int COMMAND_SERVER_DEFAULT_READ_TIMEOUT = 30;
+    constexpr int COMMAND_SERVER_HARD_MAX_READ_TIMEOUT = 3600;
+
+    uint32 BoundedCommandServerSetting(int value, int defaultValue, int hardMaximum)
+    {
+        if (value <= 0)
+            value = defaultValue;
+        return static_cast<uint32>(std::min(value, hardMaximum));
+    }
+}
+
 std::vector<std::string> ConfigAccess::GetValues(const std::string& name) const
 {
     // The original cmangos implementation iterates m_entries
@@ -128,6 +147,8 @@ bool PlayerbotAIConfig::Initialize()
     sLog.outString("Bot configuration read from %s.", config.GetFilename().c_str());
 
     enabled = config.GetBoolDefault("AiPlayerbot.Enabled", false);
+    autoSaveMana = config.GetBoolDefault("AiPlayerbot.AutoSaveMana", true);
+    forceRebuffOnReadyCheck = config.GetBoolDefault("AiPlayerbot.ForceRebuffOnReadyCheck", false);
     if (!enabled)
     {
         sLog.outString("AI Playerbot is Disabled in aiplayerbot.conf");
@@ -191,6 +212,7 @@ bool PlayerbotAIConfig::Initialize()
     almostFullHealth = config.GetIntDefault("AiPlayerbot.AlmostFullHealth", 90);
     lowMana = config.GetIntDefault("AiPlayerbot.LowMana", 15);
     mediumMana = config.GetIntDefault("AiPlayerbot.MediumMana", 40);
+    saveManaThreshold = config.GetIntDefault("AiPlayerbot.SaveManaThreshold", 60);
 
     randomGearMaxLevel = config.GetIntDefault("AiPlayerbot.RandomGearMaxLevel", 500);
     randomGearMaxDiff = config.GetIntDefault("AiPlayerbot.RandomGearMaxDiff", 9);
@@ -343,7 +365,7 @@ bool PlayerbotAIConfig::Initialize()
 
     randomChangeMultiplier = config.GetFloatDefault("AiPlayerbot.RandomChangeMultiplier", 1.0);
 
-    randomBotCombatStrategies = config.GetStringDefault("AiPlayerbot.RandomBotCombatStrategies", "-threat,+custom::say");
+    randomBotCombatStrategies = config.GetStringDefault("AiPlayerbot.RandomBotCombatStrategies", "+threat,+custom::say");
     randomBotNonCombatStrategies = config.GetStringDefault("AiPlayerbot.RandomBotNonCombatStrategies", "+custom::say");
     randomBotReactStrategies = config.GetStringDefault("AiPlayerbot.RandomBotReactStrategies", "");
     randomBotDeadStrategies = config.GetStringDefault("AiPlayerbot.RandomBotDeadStrategies", "");
@@ -356,6 +378,28 @@ bool PlayerbotAIConfig::Initialize()
     commandSeparator = config.GetStringDefault("AiPlayerbot.CommandSeparator", "\\\\");
 
     commandServerPort = config.GetIntDefault("AiPlayerbot.CommandServerPort", 0);
+    commandServerAddress = config.GetStringDefault("AiPlayerbot.CommandServerAddress", "127.0.0.1");
+    if (commandServerAddress.empty())
+        commandServerAddress = "127.0.0.1";
+
+    commandServerSecret = config.GetStringDefault("AiPlayerbot.CommandServerSecret", "");
+    // Accept the token spelling as a compatibility alias, while keeping the
+    // empty default fail-closed when the command server is enabled.
+    if (commandServerSecret.empty())
+        commandServerSecret = config.GetStringDefault("AiPlayerbot.CommandServerToken", "");
+
+    commandServerMaxClients = BoundedCommandServerSetting(
+        config.GetIntDefault("AiPlayerbot.CommandServerMaxClients", COMMAND_SERVER_DEFAULT_MAX_CLIENTS),
+        COMMAND_SERVER_DEFAULT_MAX_CLIENTS, COMMAND_SERVER_HARD_MAX_CLIENTS);
+    commandServerMaxLineLength = BoundedCommandServerSetting(
+        config.GetIntDefault("AiPlayerbot.CommandServerMaxLineLength", COMMAND_SERVER_DEFAULT_MAX_LINE_LENGTH),
+        COMMAND_SERVER_DEFAULT_MAX_LINE_LENGTH, COMMAND_SERVER_HARD_MAX_LINE_LENGTH);
+    commandServerMaxResponseLength = BoundedCommandServerSetting(
+        config.GetIntDefault("AiPlayerbot.CommandServerMaxResponseLength", COMMAND_SERVER_DEFAULT_MAX_RESPONSE_LENGTH),
+        COMMAND_SERVER_DEFAULT_MAX_RESPONSE_LENGTH, COMMAND_SERVER_HARD_MAX_RESPONSE_LENGTH);
+    commandServerReadTimeout = BoundedCommandServerSetting(
+        config.GetIntDefault("AiPlayerbot.CommandServerReadTimeout", COMMAND_SERVER_DEFAULT_READ_TIMEOUT),
+        COMMAND_SERVER_DEFAULT_READ_TIMEOUT, COMMAND_SERVER_HARD_MAX_READ_TIMEOUT);
     perfMonEnabled = config.GetBoolDefault("AiPlayerbot.PerfMonEnabled", false);
     bExplicitDbStoreSave = config.GetBoolDefault("AiPlayerbot.ExplicitDbStoreSave", false);
 
@@ -684,6 +728,7 @@ bool PlayerbotAIConfig::Initialize()
     syncQuestWithPlayer = config.GetBoolDefault("AiPlayerbot.SyncQuestWithPlayer", false);
     syncQuestForPlayer = config.GetBoolDefault("AiPlayerbot.SyncQuestForPlayer", false);
     autoTrainSpells = config.GetStringDefault("AiPlayerbot.AutoTrainSpells", "no");
+    autoMaintenanceOnMasterVendor = config.GetBoolDefault("AiPlayerbot.AutoMaintenanceOnMasterVendor", true);
     autoPickTalents = config.GetStringDefault("AiPlayerbot.AutoPickTalents", "no");
     autoLearnTrainerSpells = config.GetBoolDefault("AiPlayerbot.AutoLearnTrainerSpells", false);
     autoLearnQuestSpells = config.GetBoolDefault("AiPlayerbot.AutoLearnQuestSpells", false);

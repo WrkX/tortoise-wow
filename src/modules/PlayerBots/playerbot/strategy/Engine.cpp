@@ -162,6 +162,7 @@ bool Engine::DoNextAction(Unit* unit, int depth, bool minimal, bool isStunned)
     inDoNextAction = true;
 
     time_t currentTime = time(0);
+    ai->RollForceRebuffCycle();
     aiObjectContext->Update();
     ProcessTriggers(minimal);
     PushDefaultActions();
@@ -194,7 +195,7 @@ bool Engine::DoNextAction(Unit* unit, int depth, bool minimal, bool isStunned)
                 skipPrerequisites = basket->isSkipPrerequisites();
                 event = basket->getEvent();
                 if (minimal && (relevance < 100))
-                    continue;
+                    break;
 
                 // NOTE: queue.Pop() deletes basket
                 actionNode = queue.Pop();

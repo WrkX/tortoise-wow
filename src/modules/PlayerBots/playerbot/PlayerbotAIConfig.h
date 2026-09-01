@@ -124,6 +124,8 @@ public:
     // and means unlimited, which is also the only behaviour this tree has.
     uint32 autoGearScoreLimit = 0;
     uint32 autoGearQualityLimit = 0;  // like autoGearScoreLimit: 0 = no cap (mod-dungeon-clear reads it for its test sidecar)
+    bool autoSaveMana;
+    bool forceRebuffOnReadyCheck;
     bool allowGuildBots;
     bool allowMultiAccountAltBots;
     uint32 globalCoolDown, reactDelay, maxWaitForMove, expireActionTime, dispelAuraDuration, passiveDelay, repeatDelay,
@@ -134,6 +136,8 @@ public:
         aoeRadius, rpgDistance, targetPosRecalcDistance, farDistance, healDistance, healDistanceBg, aggroDistance, proximityDistance, maxFreeMoveDistance, freeMoveDelay, walkDistance;
     uint32 criticalHealth, lowHealth, mediumHealth, almostFullHealth;
     uint32 lowMana, mediumMana;
+    // Healer auto save-mana: skip inefficient heals below this mana %.
+    uint32 saveManaThreshold;
 
     uint32 openGoSpell;
     bool randomBotAutologin;
@@ -374,6 +378,7 @@ public:
     bool syncQuestWithPlayer;
     bool syncQuestForPlayer;
     std::string autoTrainSpells;
+    bool autoMaintenanceOnMasterVendor;
     std::string autoPickTalents;
     bool autoLearnTrainerSpells;
     bool autoLearnQuestSpells;
@@ -433,6 +438,12 @@ public:
     std::vector<worldBuff> worldBuffs;
 
     int commandServerPort;
+    std::string commandServerAddress;
+    std::string commandServerSecret;
+    uint32 commandServerMaxClients;
+    uint32 commandServerMaxLineLength;
+    uint32 commandServerMaxResponseLength;
+    uint32 commandServerReadTimeout;
     bool perfMonEnabled;
     bool bExplicitDbStoreSave = false;
 
@@ -484,4 +495,3 @@ private:
 };
 
 #define sPlayerbotAIConfig MaNGOS::Singleton<PlayerbotAIConfig>::Instance()
-

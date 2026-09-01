@@ -23,6 +23,7 @@
 #include "playerbot/RandomPlayerbotMgr.h"
 #include "playerbot/RandomPlayerbotFactory.h"
 #include "playerbot/PlayerbotAIConfig.h"
+#include "playerbot/PlayerbotAiExtension.h"
 #include "playerbot/AiFactory.h"
 #include "playerbot/strategy/actions/ChangeTalentsAction.h"
 #include "ahbot/AhBot.h"
@@ -52,6 +53,7 @@ class PlayerbotWorldScript : public WorldScript
                 return;
             sRandomPlayerbotMgr.UpdateAI(diff);
             auctionbot.Update();
+            sPlayerbotAiExtension.RunWorldUpdate(diff);
         }
 };
 
@@ -193,8 +195,15 @@ class PlayerbotPlayerScript : public PlayerScript
             if (!master || !sPlayerbotAIConfig.enabled)
                 return;
 
+            if ((lang == LANG_ADDON || type == CHAT_MSG_ADDON) &&
+                sPlayerbotAiExtension.HandleAddonMessage(master, msg))
+                return;
+
             if (PlayerbotMgr* mgr = GetBotMgr(master))
                 mgr->HandleCommand(type, msg, lang, to);
+
+            sRandomPlayerbotMgr.HandleCommand(
+                type, msg, *master, "", master->GetTeam(), lang, to);
         }
 
         // Was the CreatePlayerbotMgr() call in HandlePlayerLogin. Only a person

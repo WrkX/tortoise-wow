@@ -5,6 +5,7 @@
 #include "playerbot/PlayerbotAIConfig.h"
 #include "playerbot/strategy/values/PositionValue.h"
 #include "playerbot/strategy/values/AoeValues.h"
+#include "playerbot/strategy/values/GroupCcTargetReservation.h"
 
 #include <regex>
 
@@ -28,6 +29,15 @@ bool MediumManaTrigger::IsActive()
 bool HighManaTrigger::IsActive()
 {
     return AI_VALUE2(bool, "has mana", "self target") && AI_VALUE2(uint8, "mana", "self target") < 65;
+}
+
+bool AssistSummoningRitualTrigger::IsActive()
+{
+    if (!ai->HasActivePlayerMaster())
+        return false;
+
+    Action* action = context->GetAction("assist summoning ritual");
+    return action && action->isUseful();
 }
 
 bool AlmostFullManaTrigger::IsActive()
@@ -188,12 +198,33 @@ bool OutNumberedTrigger::IsActive()
 bool BuffTrigger::IsActive()
 {
     Unit* target = GetTarget();
-	return target && !ai->HasAura(spell, target, false, checkIsOwner) && target->IsAlive();
+    if (!target || !target->IsAlive())
+        return false;
+
+    if (ai->IsForceRebuffPending() && !ai->IsForceRebuffExpired() && !bot->IsInCombat())
+    {
+        if (ai->IsForceRebuffBuffCompleted(spell, target))
+            return false;
+
+        ai->NoteForceRebuffBuffProposed();
+        return true;
+    }
+
+    return !ai->HasAura(spell, target, false, checkIsOwner);
 }
 
 bool MyBuffTrigger::IsActive()
 {
     Unit* target = GetTarget();
+    if (target && target->IsAlive() && ai->IsForceRebuffPending() && !ai->IsForceRebuffExpired() && !bot->IsInCombat())
+    {
+        if (ai->IsForceRebuffBuffCompleted(spell, target))
+            return false;
+
+        ai->NoteForceRebuffBuffProposed();
+        return true;
+    }
+
     return target && !ai->HasMyAura(spell, target);
 }
 
@@ -654,7 +685,37 @@ bool HasCcTargetTrigger::IsActive()
     uint32 spellid = AI_VALUE2(uint32, "spell id", getName());
     if (spellid && sServerFacade.IsSpellReady(bot, spellid))
     {
-        return AI_VALUE2(Unit*, "cc target", getName()) && !AI_VALUE2(Unit*, "current cc target", getName());
+        Unit* ccTarget = AI_VALUE2(Unit*, "cc target", getName());
+        if (!ccTarget || AI_VALUE2(Unit*, "current cc target", getName()))
+            return false;
+
+        // In dungeons the group raid marker is the shared CC assignment. This
+        // prevents every controller from independently selecting the same add.
+        // If no CC icon is currently assigned, allow the value-layer fallback to
+        // pick one safe target instead of suppressing CC entirely. Fallback
+        // targets are claimed with a short-lived group reservation.
+        Unit* rtiCcTarget = AI_VALUE(Unit*, "rti cc target");
+        if (bot->GetMap() && bot->GetMap()->IsDungeon() && !bot->GetMap()->IsRaid())
+        {
+            if (rtiCcTarget)
+                return rtiCcTarget == ccTarget;
+        }
+
+        // RTI assignment bypasses fallback claims. Any other cc-target (no
+        // icon, or a fallback while an icon points elsewhere) must still
+        // respect other-owner claims and this bot's skip/exhaustion, except
+        // when this bot still owns a live in-flight claim.
+        if (rtiCcTarget != ccTarget)
+        {
+            ObjectGuid ccGuid = ccTarget->GetObjectGuid();
+            if (GroupCcTargetReservation::IsClaimedByOther(bot, ccGuid))
+                return false;
+            if (GroupCcTargetReservation::IsSkipped(bot, ccGuid) &&
+                !GroupCcTargetReservation::IsOwnedBy(bot, ccGuid))
+                return false;
+        }
+
+        return true;
     }
 
     return false;
@@ -860,6 +921,9 @@ bool InRaidFightTrigger::IsActive()
 bool GreaterBuffOnPartyTrigger::IsActive()
 {
     Unit* target = GetTarget();
+    if (target && bot->IsInGroup(target) && ai->IsForceRebuffPending() && !ai->IsForceRebuffExpired() && !bot->IsInCombat())
+        return BuffOnPartyTrigger::IsActive();
+
     return target && bot->IsInGroup(target) && BuffOnPartyTrigger::IsActive() && !ai->HasAura(lowerSpell, target, false, checkIsOwner);
 }
 

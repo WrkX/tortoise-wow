@@ -207,6 +207,7 @@ class ChatHandler
         bool HandlePlayerbotCommand(char* args);
         bool HandleRandomPlayerbotCommand(char* args);
         bool HandleAhBotCommand(char* args);
+        bool HandleDungeonClearCommand(char* args);
         bool HandleSendSpellVisualCommand(char *);
         bool HandleSendSpellImpactCommand(char *);
         bool HandleServiceDeleteCharacters(char* args);

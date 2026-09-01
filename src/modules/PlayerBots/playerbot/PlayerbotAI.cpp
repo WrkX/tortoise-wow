@@ -6,6 +6,7 @@
 #include <iomanip>
 
 #include "playerbot/AiFactory.h"
+#include "playerbot/PlayerbotAiExtension.h"
 
 #include "Movement/MovementGenerator.h"
 #include "Maps/GridNotifiers.h"
@@ -67,6 +68,90 @@ std::string &trim(std::string &s);
 
 std::set<std::string> PlayerbotAI::unsecuredCommands;
 
+namespace
+{
+    constexpr size_t MAX_PACKET_HANDLER_WORK_PER_UPDATE = 32;
+    constexpr size_t MAX_PACKET_QUEUE_SIZE = 256;
+    constexpr size_t MAX_CRITICAL_PACKET_QUEUE_SIZE = 64;
+    constexpr time_t PACKET_PRESSURE_LOG_INTERVAL = 60;
+
+    void ReportPacketQueuePressure(uint16 opcode, bool critical)
+    {
+        static std::mutex reportMutex;
+        static time_t nextReport = 0;
+        static uint64 droppedCount = 0;
+        static uint64 criticalDropCount = 0;
+        bool report = false;
+        uint64 dropped = 0;
+        uint64 criticalDropped = 0;
+        {
+            std::lock_guard<std::mutex> lock(reportMutex);
+            ++droppedCount;
+            if (critical)
+                ++criticalDropCount;
+
+            time_t now = time(nullptr);
+            if (!nextReport || now >= nextReport)
+            {
+                report = true;
+                dropped = droppedCount;
+                criticalDropped = criticalDropCount;
+                droppedCount = criticalDropCount = 0;
+                nextReport = now + PACKET_PRESSURE_LOG_INTERVAL;
+            }
+        }
+
+        if (report)
+        {
+            sLog.outError("Playerbot packet queue pressure: dropped=%llu critical=%llu latestOpcode=%u",
+                static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(criticalDropped),
+                opcode);
+        }
+    }
+
+    enum class PlayerbotSpellStartFailure
+    {
+        Unknown,
+        Range,
+        LineOfSight,
+        Facing,
+        Movement,
+        InvalidTarget
+    };
+
+    PlayerbotSpellStartFailure ClassifySpellStartFailure(SpellCastResult result)
+    {
+        switch (result)
+        {
+        case SPELL_FAILED_OUT_OF_RANGE:
+            return PlayerbotSpellStartFailure::Range;
+        case SPELL_FAILED_LINE_OF_SIGHT:
+            return PlayerbotSpellStartFailure::LineOfSight;
+        case SPELL_FAILED_NOT_INFRONT:
+        case SPELL_FAILED_UNIT_NOT_INFRONT:
+            return PlayerbotSpellStartFailure::Facing;
+        case SPELL_FAILED_MOVING:
+        case SPELL_FAILED_NOT_STANDING:
+            return PlayerbotSpellStartFailure::Movement;
+        case SPELL_FAILED_BAD_TARGETS:
+        case SPELL_FAILED_TARGETS_DEAD:
+            return PlayerbotSpellStartFailure::InvalidTarget;
+        default:
+            return PlayerbotSpellStartFailure::Unknown;
+        }
+    }
+
+    uint32 BoundedSpellRetryDelay()
+    {
+        // Recovery must remain responsive even if a deployment has an
+        // unusually large ReactDelay, while a zero value must not hot-loop.
+        uint32 delay = sPlayerbotAIConfig.reactDelay;
+        if (!delay)
+            return 1;
+        return delay > 1000U ? 1000U : delay;
+    }
+}
+
 uint32 PlayerbotChatHandler::extractQuestId(std::string str)
 {
     char* source = (char*)str.c_str();
@@ -74,31 +159,107 @@ uint32 PlayerbotChatHandler::extractQuestId(std::string str)
     return cId ? atol(cId) : 0;
 }
 
-void PacketHandlingHelper::AddHandler(uint16 opcode, std::string handler, bool shouldDelay)
+void PacketHandlingHelper::AddHandler(uint16 opcode, std::string handler, bool shouldDelay,
+                                      bool isCritical)
 {
     handlers[opcode] = handler;
     delay[opcode] = shouldDelay;
+    critical[opcode] = isCritical;
 }
 
-void PacketHandlingHelper::Handle(ExternalEventHelper &helper)
+void PacketHandlingHelper::Handle(ExternalEventHelper &helper, size_t& remainingWork, size_t maxWork)
 {
-    if (!m_botPacketMutex.try_lock()) //Packets do not have to be handled now. Handle them later.
+    // A bounded batch keeps packet-triggered work from delaying combat. The
+    // four lanes are drained round-robin under the lock, while handlers run
+    // without it.
+    std::vector<std::unique_ptr<WorldPacket>> batch;
+    size_t workLimit = std::min(remainingWork, maxWork);
+    batch.reserve(workLimit);
+
+    if (!remainingWork || !maxWork)
         return;
 
-    // queue holds unique_ptr<WorldPacket> due to Penqle's move-only WorldPacket.
-    std::stack<std::unique_ptr<WorldPacket>> delayed;
+    std::unique_lock<std::mutex> lock(m_botPacketMutex, std::try_to_lock);
+    if (!lock.owns_lock()) // Packets do not have to be handled now. Handle them later.
+        return;
 
-    while (!queue.empty())
+    for (size_t work = 0; work < workLimit; ++work)
     {
-        if (!helper.HandlePacket(handlers, *queue.top()))
-            if (delay[queue.top()->GetOpcode()])
-                delayed.push(std::move(queue.top()));
-        queue.pop();
+        bool moved = false;
+        for (size_t laneOffset = 0; laneOffset < 4; ++laneOffset)
+        {
+            size_t lane = (queueRoundRobinCursor + laneOffset) % 4;
+            std::deque<std::unique_ptr<WorldPacket>>* packets = nullptr;
+            switch (lane)
+            {
+            case 0:
+                packets = &criticalQueue;
+                break;
+            case 1:
+                packets = &queue;
+                break;
+            case 2:
+                packets = &criticalRetryQueue;
+                break;
+            case 3:
+                packets = &retryQueue;
+                break;
+            }
+
+            if (packets && !packets->empty())
+            {
+                batch.push_back(std::move(packets->back()));
+                packets->pop_back();
+                queueRoundRobinCursor = (lane + 1) % 4;
+                moved = true;
+                break;
+            }
+        }
+
+        if (!moved)
+            break;
+    }
+    remainingWork -= batch.size();
+    lock.unlock();
+
+    struct RetryPacket
+    {
+        std::unique_ptr<WorldPacket> packet;
+        bool critical;
+    };
+    std::vector<RetryPacket> retries;
+    retries.reserve(batch.size());
+
+    for (std::vector<std::unique_ptr<WorldPacket>>::iterator packet = batch.begin(); packet != batch.end(); ++packet)
+    {
+        if (!*packet)
+            continue;
+
+        uint16 opcode = (*packet)->GetOpcode();
+        std::map<uint16, bool>::const_iterator delayIt = delay.find(opcode);
+        if (!helper.HandlePacket(handlers, **packet) && delayIt != delay.end() && delayIt->second)
+        {
+            std::map<uint16, bool>::const_iterator criticalIt = critical.find(opcode);
+            retries.push_back(RetryPacket { std::move(*packet),
+                criticalIt != critical.end() && criticalIt->second });
+        }
     }
 
-    queue = std::move(delayed);
+    std::vector<std::pair<uint16, bool>> dropped;
+    lock.lock();
+    for (std::vector<RetryPacket>::iterator retry = retries.begin(); retry != retries.end(); ++retry)
+    {
+        std::deque<std::unique_ptr<WorldPacket>>& target = retry->critical ? criticalRetryQueue : retryQueue;
+        size_t capacity = retry->critical ? MAX_CRITICAL_PACKET_QUEUE_SIZE : MAX_PACKET_QUEUE_SIZE;
+        if (target.size() < capacity)
+            target.push_back(std::move(retry->packet));
+        else
+            dropped.push_back(std::make_pair(retry->packet->GetOpcode(), retry->critical));
+    }
+    lock.unlock();
 
-    m_botPacketMutex.unlock();
+    for (std::vector<std::pair<uint16, bool>>::const_iterator drop = dropped.begin(); drop != dropped.end(); ++drop)
+        ReportPacketQueuePressure(drop->first, drop->second);
 }
 
 void PacketHandlingHelper::AddPacket(const WorldPacket& packet)
@@ -106,12 +267,27 @@ void PacketHandlingHelper::AddPacket(const WorldPacket& packet)
     if (packet.empty() && packet.GetOpcode() != MSG_RAID_READY_CHECK)
         return;
 
-    m_botPacketMutex.lock(); //We are going to add packets. Stop any new handling and add them.
+    bool dropped = false;
+    bool isCritical = false;
+    {
+        std::lock_guard<std::mutex> lock(m_botPacketMutex); // Stop handling while adding the packet.
 
-	if (handlers.find(packet.GetOpcode()) != handlers.end())
-        queue.push(std::make_unique<WorldPacket>(packet));
+        uint16 opcode = packet.GetOpcode();
+        if (handlers.find(opcode) == handlers.end())
+            return;
 
-    m_botPacketMutex.unlock();
+        isCritical = critical[opcode];
+        std::deque<std::unique_ptr<WorldPacket>>& target = isCritical ? criticalQueue : queue;
+        size_t capacity = isCritical ? MAX_CRITICAL_PACKET_QUEUE_SIZE : MAX_PACKET_QUEUE_SIZE;
+
+        if (target.size() < capacity)
+            target.push_back(std::make_unique<WorldPacket>(packet));
+        else
+            dropped = true;
+    }
+
+    if (dropped)
+        ReportPacketQueuePressure(packet.GetOpcode(), isCritical);
 }
 
 PlayerbotAI::PlayerbotAI() : PlayerbotAIBase(), bot(NULL), aiObjectContext(NULL),
@@ -167,38 +343,38 @@ PlayerbotAI::PlayerbotAI(Player* bot) :
 
     masterIncomingPacketHandlers.AddHandler(CMSG_GAMEOBJ_USE, "use game object");
     masterIncomingPacketHandlers.AddHandler(CMSG_AREATRIGGER, "area trigger");
-    masterIncomingPacketHandlers.AddHandler(CMSG_LOOT_ROLL, "loot roll", true);
-    masterIncomingPacketHandlers.AddHandler(CMSG_GOSSIP_HELLO, "gossip hello");
-    masterIncomingPacketHandlers.AddHandler(CMSG_QUESTGIVER_HELLO, "gossip hello");
-    masterIncomingPacketHandlers.AddHandler(CMSG_QUESTGIVER_COMPLETE_QUEST, "complete quest");
-    masterIncomingPacketHandlers.AddHandler(CMSG_QUESTGIVER_ACCEPT_QUEST, "accept quest");
-    masterIncomingPacketHandlers.AddHandler(CMSG_QUEST_CONFIRM_ACCEPT, "confirm quest");
-    masterIncomingPacketHandlers.AddHandler(CMSG_ACTIVATETAXI, "activate taxi");
-    masterIncomingPacketHandlers.AddHandler(CMSG_ACTIVATETAXIEXPRESS, "activate taxi");
-    masterIncomingPacketHandlers.AddHandler(CMSG_TAXICLEARALLNODES, "taxi done");
-    masterIncomingPacketHandlers.AddHandler(CMSG_TAXICLEARNODE, "taxi done");
-    masterIncomingPacketHandlers.AddHandler(CMSG_GROUP_UNINVITE, "uninvite");
-    masterIncomingPacketHandlers.AddHandler(CMSG_GROUP_UNINVITE_GUID, "uninvite guid");
-    masterIncomingPacketHandlers.AddHandler(CMSG_PUSHQUESTTOPARTY, "quest share");
+    masterIncomingPacketHandlers.AddHandler(CMSG_LOOT_ROLL, "loot roll", true, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_GOSSIP_HELLO, "gossip hello", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_QUESTGIVER_HELLO, "gossip hello", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_QUESTGIVER_COMPLETE_QUEST, "complete quest", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_QUESTGIVER_ACCEPT_QUEST, "accept quest", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_QUEST_CONFIRM_ACCEPT, "confirm quest", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_ACTIVATETAXI, "activate taxi", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_ACTIVATETAXIEXPRESS, "activate taxi", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_TAXICLEARALLNODES, "taxi done", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_TAXICLEARNODE, "taxi done", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_GROUP_UNINVITE, "uninvite", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_GROUP_UNINVITE_GUID, "uninvite guid", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_PUSHQUESTTOPARTY, "quest share", false, true);
     masterIncomingPacketHandlers.AddHandler(CMSG_CAST_SPELL, "see spell");
-    masterIncomingPacketHandlers.AddHandler(CMSG_REPOP_REQUEST, "release spirit");
-    masterIncomingPacketHandlers.AddHandler(CMSG_RECLAIM_CORPSE, "revive from corpse");
+    masterIncomingPacketHandlers.AddHandler(CMSG_REPOP_REQUEST, "release spirit", false, true);
+    masterIncomingPacketHandlers.AddHandler(CMSG_RECLAIM_CORPSE, "revive from corpse", false, true);
 
 #ifdef MANGOSBOT_TWO
-    masterIncomingPacketHandlers.AddHandler(CMSG_LFG_TELEPORT, "lfg teleport");
+    masterIncomingPacketHandlers.AddHandler(CMSG_LFG_TELEPORT, "lfg teleport", false, true);
 #endif
 
     botOutgoingPacketHandlers.AddHandler(SMSG_PETITION_SHOW_SIGNATURES, "petition offer");
-    botOutgoingPacketHandlers.AddHandler(SMSG_BATTLEFIELD_STATUS, "bg status");
-    botOutgoingPacketHandlers.AddHandler(SMSG_GROUP_INVITE, "group invite");
-    botOutgoingPacketHandlers.AddHandler(SMSG_GUILD_INVITE, "guild accept");
+    botOutgoingPacketHandlers.AddHandler(SMSG_BATTLEFIELD_STATUS, "bg status", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_GROUP_INVITE, "group invite", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_GUILD_INVITE, "guild accept", false, true);
     botOutgoingPacketHandlers.AddHandler(BUY_ERR_NOT_ENOUGHT_MONEY, "not enough money");
     botOutgoingPacketHandlers.AddHandler(BUY_ERR_REPUTATION_REQUIRE, "not enough reputation");
-    botOutgoingPacketHandlers.AddHandler(SMSG_GROUP_SET_LEADER, "group set leader");
-    botOutgoingPacketHandlers.AddHandler(SMSG_FORCE_RUN_SPEED_CHANGE, "check mount state");
-    botOutgoingPacketHandlers.AddHandler(SMSG_RESURRECT_REQUEST, "resurrect request");
+    botOutgoingPacketHandlers.AddHandler(SMSG_GROUP_SET_LEADER, "group set leader", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_FORCE_RUN_SPEED_CHANGE, "check mount state", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_RESURRECT_REQUEST, "resurrect request", false, true);
     botOutgoingPacketHandlers.AddHandler(SMSG_INVENTORY_CHANGE_FAILURE, "cannot equip");
-    botOutgoingPacketHandlers.AddHandler(SMSG_TRADE_STATUS, "trade status");
+    botOutgoingPacketHandlers.AddHandler(SMSG_TRADE_STATUS, "trade status", false, true);
     botOutgoingPacketHandlers.AddHandler(SMSG_LOOT_RESPONSE, "loot response", true);
     botOutgoingPacketHandlers.AddHandler(SMSG_QUESTUPDATE_ADD_KILL, "quest update add kill", true);
 #ifndef MANGOSBOT_TWO
@@ -216,27 +392,27 @@ PlayerbotAI::PlayerbotAI(Player* bot) :
     botOutgoingPacketHandlers.AddHandler(SMSG_PVP_CREDIT, "honorgain", true);
     botOutgoingPacketHandlers.AddHandler(SMSG_TEXT_EMOTE, "receive text emote");
     botOutgoingPacketHandlers.AddHandler(SMSG_EMOTE, "receive emote");
-    botOutgoingPacketHandlers.AddHandler(SMSG_LOOT_START_ROLL, "loot start roll", true);
-    botOutgoingPacketHandlers.AddHandler(SMSG_SUMMON_REQUEST, "summon request");
-    botOutgoingPacketHandlers.AddHandler(MSG_RAID_READY_CHECK, "ready check");
-    botOutgoingPacketHandlers.AddHandler(SMSG_QUEST_CONFIRM_ACCEPT, "confirm quest");
-    botOutgoingPacketHandlers.AddHandler(SMSG_QUESTGIVER_QUEST_DETAILS, "quest details");   
+    botOutgoingPacketHandlers.AddHandler(SMSG_LOOT_START_ROLL, "loot start roll", true, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_SUMMON_REQUEST, "summon request", false, true);
+    botOutgoingPacketHandlers.AddHandler(MSG_RAID_READY_CHECK, "ready check", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_QUEST_CONFIRM_ACCEPT, "confirm quest", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_QUESTGIVER_QUEST_DETAILS, "quest details", false, true);
 
 #ifndef MANGOSBOT_ZERO
-    botOutgoingPacketHandlers.AddHandler(SMSG_ARENA_TEAM_INVITE, "arena team invite");
+    botOutgoingPacketHandlers.AddHandler(SMSG_ARENA_TEAM_INVITE, "arena team invite", false, true);
 #endif
 #ifdef MANGOSBOT_TWO
-    botOutgoingPacketHandlers.AddHandler(SMSG_LFG_ROLE_CHECK_UPDATE, "lfg role check");
-    botOutgoingPacketHandlers.AddHandler(SMSG_LFG_PROPOSAL_UPDATE, "lfg proposal");
+    botOutgoingPacketHandlers.AddHandler(SMSG_LFG_ROLE_CHECK_UPDATE, "lfg role check", false, true);
+    botOutgoingPacketHandlers.AddHandler(SMSG_LFG_PROPOSAL_UPDATE, "lfg proposal", false, true);
 #endif
 
     botOutgoingPacketHandlers.AddHandler(SMSG_CAST_RESULT, "cast failed");
-    botOutgoingPacketHandlers.AddHandler(SMSG_DUEL_REQUESTED, "duel requested");
+    botOutgoingPacketHandlers.AddHandler(SMSG_DUEL_REQUESTED, "duel requested", false, true);
     botOutgoingPacketHandlers.AddHandler(SMSG_INVENTORY_CHANGE_FAILURE, "inventory change failure");
 
-    masterOutgoingPacketHandlers.AddHandler(SMSG_PARTY_COMMAND_RESULT, "party command");
+    masterOutgoingPacketHandlers.AddHandler(SMSG_PARTY_COMMAND_RESULT, "party command", false, true);
 #ifndef MANGOSBOT_ZERO
-    masterOutgoingPacketHandlers.AddHandler(MSG_RAID_READY_CHECK_FINISHED, "ready check finished");
+    masterOutgoingPacketHandlers.AddHandler(MSG_RAID_READY_CHECK_FINISHED, "ready check finished", false, true);
 #endif
 
     if (!HasRealPlayerMaster() && bot->GetFreeTalentPoints() > 0)
@@ -289,6 +465,8 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
     // (set in SetMaster, see PlayerbotAI.h) is the safe lookup key —
     // we never deref the cached `master` pointer in this check.
     RevalidateMasterPointer();
+
+    ObserveCombatTargetChanges();
 
     if(aiInternalUpdateDelay > elapsed)
     {
@@ -382,6 +560,13 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
             StopMoving();
 
         isMoving = false;
+        faceTargetUpdateDelay = 0;
+
+        if (context)
+            context->InvalidateCombatTargetValues();
+
+        if (CanWakeCombatDecision())
+            ResetAIInternalUpdateDelay();
     }
 
 #ifdef MANGOSBOT_TWO
@@ -695,6 +880,122 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
     SC_PHASE("UpdateAI.exit", bot ? bot->GetName() : "(null)");
 }
 
+void PlayerbotAI::ObserveCombatTargetChanges()
+{
+    AiObjectContext* context = GetAiObjectContext();
+    if (!context)
+        return;
+
+    bool targetChanged = false;
+    const ObjectGuid selection = bot->GetSelectionGuid();
+    if (selection != lastObservedSelection)
+    {
+        lastObservedSelection = selection;
+        targetChanged = true;
+    }
+
+    // Current target is a manually-set value and must not be reset here. Read
+    // it only when it already exists so observing target replacement never
+    // instantiates a value or changes targeting policy.
+    Value<Unit*>* currentTargetValue = context->FindValue<Unit*>("current target");
+    if (currentTargetValue)
+    {
+        Unit* currentTarget = currentTargetValue->Get();
+        const ObjectGuid target = currentTarget ? currentTarget->GetObjectGuid() : ObjectGuid();
+        if (target != lastObservedCombatTarget)
+        {
+            lastObservedCombatTarget = target;
+            targetChanged = true;
+        }
+    }
+
+    if (targetChanged)
+    {
+        context->InvalidateCombatTargetValues();
+        faceTargetUpdateDelay = 0;
+
+        if (CanWakeCombatDecision())
+            ResetAIInternalUpdateDelay();
+    }
+}
+
+bool PlayerbotAI::CanWakeCombatDecision() const
+{
+    return sServerFacade.IsInCombat(bot) &&
+        !sServerFacade.UnitIsDead(bot) &&
+        !bot->IsNonMeleeSpellCasted(true) &&
+        !isWaiting &&
+        !bot->IsBeingTeleported() &&
+        !bot->IsTaxiFlying() &&
+        !sServerFacade.IsFrozen(bot) &&
+        !sServerFacade.IsCharmed(bot) &&
+        !bot->IsPolymorphed() &&
+        !bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST) &&
+        !bot->HasAuraType(SPELL_AURA_MOD_CONFUSE) &&
+        !bot->HasAuraType(SPELL_AURA_MOD_STUN) &&
+        !bot->hasUnitState(UNIT_STAT_CAN_NOT_REACT_OR_LOST_CONTROL);
+}
+
+void PlayerbotAI::ScheduleSpellRetry(bool waitForSpell, uint32* outSpellDuration)
+{
+    uint32 retryDelay = BoundedSpellRetryDelay();
+    if (waitForSpell)
+        SetAIInternalUpdateDelay(retryDelay);
+
+    if (outSpellDuration)
+        *outSpellDuration = retryDelay;
+}
+
+void PlayerbotAI::HandleSpellStartFailure(SpellCastResult result, bool hasUnitTarget, bool waitForSpell)
+{
+    PlayerbotSpellStartFailure failure = ClassifySpellStartFailure(result);
+    if (failure == PlayerbotSpellStartFailure::Unknown)
+        return;
+
+    AiObjectContext* context = GetAiObjectContext();
+    if (hasUnitTarget && context)
+    {
+        switch (failure)
+        {
+        case PlayerbotSpellStartFailure::Range:
+        case PlayerbotSpellStartFailure::LineOfSight:
+            context->InvalidateValue("distance::current target");
+            context->InvalidateValue("moving::current target");
+            context->InvalidateValue("behind::current target");
+            break;
+        case PlayerbotSpellStartFailure::Facing:
+            context->InvalidateValue("facing::current target");
+            context->InvalidateValue("behind::current target");
+            break;
+        case PlayerbotSpellStartFailure::Movement:
+            context->InvalidateValue("moving::current target");
+            break;
+        case PlayerbotSpellStartFailure::InvalidTarget:
+            context->InvalidateValue("invalid target::current target");
+            context->InvalidateValue("dead::current target");
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (failure == PlayerbotSpellStartFailure::Facing ||
+        failure == PlayerbotSpellStartFailure::Movement)
+    {
+        // UpdateFaceTarget still applies its normal movement/control guards;
+        // this only makes the next eligible check happen promptly.
+        faceTargetUpdateDelay = 0;
+    }
+
+    // Only callers that explicitly requested spell waiting should block the AI
+    // after a typed SpellStart failure. Most combat actions pass false so an
+    // unsuccessful action can leave its existing alternatives eligible on the
+    // next update. Unknown, control, cooldown, resource, equipment, and
+    // variant-specific failures retain the caller's existing behavior.
+    if (waitForSpell)
+        SetAIInternalUpdateDelay(BoundedSpellRetryDelay());
+}
+
 bool PlayerbotAI::UpdateAIReaction(uint32 elapsed, bool minimal, bool isStunned)
 {
     bool reactionFound;
@@ -705,23 +1006,17 @@ bool PlayerbotAI::UpdateAIReaction(uint32 elapsed, bool minimal, bool isStunned)
 
     if(reactionFound)
     {
-        // If new reaction found force stop current actions (if required)
-        const Reaction* reaction = reactionEngine->GetReaction();
-        if(reaction)
-        {
-            if(reaction->ShouldInterruptCast())
-            {
-                InterruptSpell();
-            }
-
-            if (reaction->ShouldInterruptMovement())
-            {
-                StopMoving();
-            }
-        }
+        // Start the selected reaction immediately. StartReaction owns the
+        // interruption ordering and guards the action/listener sequence
+        // against synchronous re-entry.
+        reactionEngine->StartReaction(minimal);
     }
 
-    return reactionInProgress;
+    // reactionFound must gate the normal engine even if execution failed and
+    // StartReaction cleared the pending reaction. A selected reaction still
+    // consumed this update and its failure backoff is owned by the reaction
+    // engine.
+    return reactionInProgress || reactionFound;
 }
 
 void PlayerbotAI::UpdateFaceTarget(uint32 elapsed, bool minimal)
@@ -1024,6 +1319,80 @@ time_t PlayerbotAI::GetCombatStartTime() const
     return aiObjectContext->GetValue<time_t>("combat start time")->Get();
 }
 
+namespace
+{
+    std::string ForceRebuffBuffKey(const std::string& spell, Unit* target)
+    {
+        return spell + ":" + std::to_string(target ? target->GetObjectGuid().GetRawValue() : 0);
+    }
+}
+
+void PlayerbotAI::BeginForceRebuff(bool replyToReadyCheck)
+{
+    forceRebuffPending = true;
+    forceRebuffReplyToReadyCheck = forceRebuffReplyToReadyCheck || replyToReadyCheck;
+    forceRebuffStartTime = time(0);
+    forceRebuffBuffWorkThisCycle = false;
+    forceRebuffCompletedBuffs.clear();
+}
+
+void PlayerbotAI::EndForceRebuff()
+{
+    forceRebuffPending = false;
+    forceRebuffReplyToReadyCheck = false;
+    forceRebuffBuffWorkThisCycle = false;
+    forceRebuffStartTime = 0;
+    forceRebuffCompletedBuffs.clear();
+}
+
+bool PlayerbotAI::IsForceRebuffPending() const
+{
+    return forceRebuffPending;
+}
+
+bool PlayerbotAI::IsForceRebuffExpired() const
+{
+    return forceRebuffPending && forceRebuffStartTime && time(0) - forceRebuffStartTime >= 120;
+}
+
+bool PlayerbotAI::ShouldReplyToReadyCheck() const
+{
+    return forceRebuffPending && forceRebuffReplyToReadyCheck;
+}
+
+void PlayerbotAI::RollForceRebuffCycle()
+{
+    if (forceRebuffPending)
+        forceRebuffBuffWorkThisCycle = false;
+}
+
+void PlayerbotAI::NoteForceRebuffBuffProposed()
+{
+    if (forceRebuffPending && !IsForceRebuffExpired() && !bot->IsInCombat())
+        forceRebuffBuffWorkThisCycle = true;
+}
+
+void PlayerbotAI::NoteForceRebuffBuffWork()
+{
+    NoteForceRebuffBuffProposed();
+}
+
+bool PlayerbotAI::HasForceRebuffBuffWorkThisCycle() const
+{
+    return forceRebuffBuffWorkThisCycle;
+}
+
+bool PlayerbotAI::IsForceRebuffBuffCompleted(const std::string& spell, Unit* target) const
+{
+    return target && forceRebuffCompletedBuffs.find(ForceRebuffBuffKey(spell, target)) != forceRebuffCompletedBuffs.end();
+}
+
+void PlayerbotAI::MarkForceRebuffBuffCompleted(const std::string& spell, Unit* target)
+{
+    if (forceRebuffPending && !IsForceRebuffExpired() && target)
+        forceRebuffCompletedBuffs.insert(ForceRebuffBuffKey(spell, target));
+}
+
 void PlayerbotAI::OnCombatStarted()
 {
     if(!IsStateActive(BotState::BOT_STATE_COMBAT))
@@ -1089,6 +1458,7 @@ void PlayerbotAI::OnDeath()
         if (bot->GetCorpse() && bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
             ChangeEngine(BotState::BOT_STATE_DEAD);
+            sPlayerbotAiExtension.RunStrategyGates(this, bot);
             return;
         }
 
@@ -1175,6 +1545,7 @@ void PlayerbotAI::OnDeath()
         SET_AI_VALUE2(bool, "manual bool", "enemies near corpse", false);
         SET_AI_VALUE2(bool, "manual bool", "enemies near graveyard", false);
         ChangeEngine(BotState::BOT_STATE_DEAD);
+        sPlayerbotAiExtension.RunStrategyGates(this, bot);
     }
 }
 
@@ -1190,6 +1561,7 @@ void PlayerbotAI::OnResurrected()
         }
 
         ChangeEngine(BotState::BOT_STATE_NON_COMBAT);
+        sPlayerbotAiExtension.RunStrategyGates(this, bot);
     }
 }
 
@@ -1297,12 +1669,38 @@ void PlayerbotAI::UpdateAIInternal(uint32 elapsed, bool minimal)
         return;
     }
 
-    SC_PHASE("UpdateAIInternal.botOutgoingPackets", bot ? bot->GetName() : "(null)");
-    botOutgoingPacketHandlers.Handle(helper);
-    SC_PHASE("UpdateAIInternal.masterIncomingPackets", bot ? bot->GetName() : "(null)");
-    masterIncomingPacketHandlers.Handle(helper);
-    SC_PHASE("UpdateAIInternal.masterOutgoingPackets", bot ? bot->GetName() : "(null)");
-    masterOutgoingPacketHandlers.Handle(helper);
+    // One aggregate budget is shared across all helper queues. A round-robin
+    // slice per helper preserves progress for later helpers when the first
+    // queue is saturated; each helper retains LIFO order within its lanes.
+    size_t packetWorkBudget = MAX_PACKET_HANDLER_WORK_PER_UPDATE;
+    PacketHandlingHelper* packetHelpers[] = {
+        &botOutgoingPacketHandlers, &masterIncomingPacketHandlers, &masterOutgoingPacketHandlers
+    };
+    size_t nextPacketHelper = packetHelperRoundRobinCursor % 3;
+    while (packetWorkBudget)
+    {
+        size_t startHelper = nextPacketHelper;
+        size_t handledThisRound = 0;
+        for (size_t offset = 0; offset < 3 && packetWorkBudget; ++offset)
+        {
+            size_t helperIndex = (startHelper + offset) % 3;
+            size_t before = packetWorkBudget;
+            SC_PHASE(helperIndex == 0 ? "UpdateAIInternal.botOutgoingPackets" :
+                     helperIndex == 1 ? "UpdateAIInternal.masterIncomingPackets" :
+                                        "UpdateAIInternal.masterOutgoingPackets",
+                     bot ? bot->GetName() : "(null)");
+            packetHelpers[helperIndex]->Handle(helper, packetWorkBudget, 1);
+            if (packetWorkBudget < before)
+            {
+                handledThisRound += before - packetWorkBudget;
+                nextPacketHelper = (helperIndex + 1) % 3;
+            }
+        }
+
+        if (!handledThisRound)
+            break;
+    }
+    packetHelperRoundRobinCursor = nextPacketHelper;
 
     SC_PHASE("UpdateAIInternal.DoNextAction", bot ? bot->GetName() : "(null)");
 	DoNextAction(minimal);
@@ -1385,6 +1783,8 @@ void PlayerbotAI::Reset(bool full)
     RESET_AI_VALUE(uint32,"lfg proposal");
     RESET_AI_VALUE(time_t,"combat start time");
     bot->SetSelectionGuid(ObjectGuid());
+    lastObservedSelection = ObjectGuid();
+    lastObservedCombatTarget = ObjectGuid();
 
     LastSpellCast & lastSpell = AI_VALUE(LastSpellCast&,"last spell cast");
     lastSpell.Reset();
@@ -2084,18 +2484,14 @@ void PlayerbotAI::SpellInterrupted(uint32 spellid)
     if (!spellid || lastSpell.id != spellid)
         return;
 
-    time_t now = time(0);
-    if (now <= lastSpell.time)
-        return;
-
-    uint32 castTimeSpent = 1000 * (now - lastSpell.time);
+    uint32 castTimeSpent = WorldTimer::getMSTimeDiff(lastSpell.time, WorldTimer::getMSTime());
     uint32 globalCooldown = CalculateGlobalCooldown(lastSpell.id);
     if (castTimeSpent < globalCooldown)
         SetAIInternalUpdateDelay(globalCooldown - castTimeSpent);
     else
         SetAIInternalUpdateDelay(sPlayerbotAIConfig.reactDelay);
 
-    lastSpell.id = 0;
+    lastSpell.Reset();
 }
 
 int32 PlayerbotAI::CalculateGlobalCooldown(uint32 spellid)
@@ -2330,6 +2726,14 @@ void PlayerbotAI::DoNextAction(bool min)
 #ifdef MANGOSBOT_ZERO
     if (bot->InBattleGround() && !HasStrategy("battleground", BotState::BOT_STATE_NON_COMBAT))
         ResetStrategies();
+
+    // Classic healers keep offdps from open-world init; drop it once they enter an instance.
+    if (HasStrategy("offdps", BotState::BOT_STATE_COMBAT))
+    {
+        Map* map = bot->GetMap();
+        if (bot->InBattleGround() || (map && (map->IsDungeon() || map->IsRaid())))
+            ChangeStrategy("-offdps", BotState::BOT_STATE_COMBAT);
+    }
 #else
     if ((bot->InBattleGround() && (!bot->IsBeingTeleported() && !bot->InArena()) && !HasStrategy("battleground", BotState::BOT_STATE_NON_COMBAT)) || ((!bot->IsBeingTeleported()&&bot->InArena()) && !HasStrategy("arena", BotState::BOT_STATE_NON_COMBAT)))
         ResetStrategies();
@@ -2658,6 +3062,11 @@ void PlayerbotAI::ResetStrategies(bool autoLoad)
 
     if (bot->IsInWorld())
         ApplyInstanceStrategies(bot->GetMapId());
+
+    // Optional modules (DungeonClear) re-assert dungeon-gated strategies after
+    // every rebuild — ResetStrategies wipes the engine and would otherwise drop
+    // mid-run triggers until the next map change.
+    sPlayerbotAiExtension.RunStrategyGates(this, bot);
 }
 
 bool PlayerbotAI::IsRanged(Player* player, bool inGroup)
@@ -2722,7 +3131,7 @@ bool PlayerbotAI::IsHeal(Player* player, bool inGroup)
 
 bool PlayerbotAI::IsDps(Player* player, bool inGroup)
 {
-    PlayerbotAI* botAi = player->GetPlayerbotAI();
+    PlayerbotAI* botAi = GetBotAI(player);
     if (botAi)
     {
         bool isDps = botAi->ContainsStrategy(STRATEGY_TYPE_DPS);
@@ -2832,6 +3241,8 @@ void PlayerbotAI::ApplyInstanceStrategies(uint32 mapId, bool /*tellMaster*/)
 
     if (mapId == 409)
         ChangeStrategy("+molten core", BotState::BOT_STATE_ALL);
+
+    sPlayerbotAiExtension.RunStrategyGates(this, bot);
 }
 
 namespace MaNGOS
@@ -4463,31 +4874,59 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
             }
         }
 
-        bool damage = false;
-        for (int32 i = EFFECT_INDEX_0; i <= EFFECT_INDEX_2; i++)
+        uint8 selectedEffectMask = effectMask;
+        if (!selectedEffectMask)
         {
-            // direct damage
-            if (spellInfo->Effect[(SpellEffectIndex)i] == SPELL_EFFECT_SCHOOL_DAMAGE)
+            for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
+            {
+                if (spellInfo->Effect[i] != SPELL_EFFECT_NONE)
+                    selectedEffectMask |= (1 << i);
+            }
+        }
+
+        bool damage = false;
+        for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
+        {
+            if (!(selectedEffectMask & (1 << i)))
+                continue;
+
+            switch (spellInfo->Effect[i])
+            {
+                case SPELL_EFFECT_INSTAKILL:
+                case SPELL_EFFECT_SCHOOL_DAMAGE:
+                case SPELL_EFFECT_ENVIRONMENTAL_DAMAGE:
+                case SPELL_EFFECT_HEALTH_LEECH:
+                case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+                case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+                case SPELL_EFFECT_WEAPON_DAMAGE:
+                case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                    damage = true;
+                    break;
+                default:
+                    break;
+            }
+
+            if (damage)
+                break;
+
+            if (spellInfo->Effect[i] == SPELL_EFFECT_APPLY_AURA &&
+                spellInfo->EffectBasePoints[i] >= 0 &&
+                spellInfo->EffectApplyAuraName[i] != SPELL_AURA_PERIODIC_HEALTH_FUNNEL &&
+                Spells::IsDamagingAuraEffect(spellInfo->EffectApplyAuraName[i]))
             {
                 damage = true;
                 break;
-            }
-            // periodic damage
-            if (spellInfo->Effect[(SpellEffectIndex)i] == SPELL_EFFECT_APPLY_AURA && spellInfo->EffectBasePoints[i] >= 0)
-            {
-                if (spellInfo->EffectApplyAuraName[i] == SPELL_AURA_PERIODIC_DAMAGE)
-                {
-                    damage = true;
-                    break;
-                }
             }
         }
 
         if (!damage)
         {
-            for (int32 i = EFFECT_INDEX_0; i <= EFFECT_INDEX_2; i++)
+            for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
             {
-                bool immune = target->IsImmuneToSpellEffect(spellInfo, (SpellEffectIndex)i, false);
+                if (!(selectedEffectMask & (1 << i)))
+                    continue;
+
+                bool immune = target->IsImmuneToSpellEffect(spellInfo, SpellEffectIndex(i), false);
                 if (immune)
                 {
                     if (checkResult)
@@ -4497,6 +4936,24 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, uint8 effectMask, b
 
                     return false;
                 }
+            }
+        }
+        else if (!neutralSpell && !spellInfo->IsPositiveEffectMask(selectedEffectMask, bot, target))
+        {
+            bool immune = target->IsImmuneToSpell(spellInfo, false);
+            if (!immune)
+                immune = target->IsImmuneToSchool(spellInfo, selectedEffectMask);
+            if (!immune)
+                immune = target->IsImmuneToDamage(GetSpellSchoolMask(spellInfo), spellInfo);
+
+            if (immune)
+            {
+                if (checkResult)
+                {
+                    *checkResult = SPELL_FAILED_IMMUNE;
+                }
+
+                return false;
             }
         }
 
@@ -4864,6 +5321,14 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
 	ObjectGuid oldSel = bot->GetSelectionGuid();
 	bot->SetSelectionGuid(target->GetObjectGuid());
 
+    // SpellStart requires the selection to match the explicit target, but the
+    // selection is temporary AI state. Restore it on every exit path, including
+    // failures, and also when there was no prior selection.
+    auto restoreSelection = [this, oldSel]()
+    {
+        bot->SetSelectionGuid(oldSel);
+    };
+
     WorldObject* faceTo = target;
     if (!sServerFacade.IsInFront(bot, faceTo, sPlayerbotAIConfig.sightDistance, CAST_ANGLE_IN_FRONT))
     {
@@ -4881,15 +5346,8 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
 
     if (failWithDelay)
     {
-        if(waitForSpell)
-        {
-            SetAIInternalUpdateDelay(sPlayerbotAIConfig.globalCoolDown);
-        }
-
-        if(outSpellDuration)
-        {
-            *outSpellDuration = sPlayerbotAIConfig.globalCoolDown;
-        }
+        ScheduleSpellRetry(waitForSpell, outSpellDuration);
+        restoreSelection();
 
         return false;
     }
@@ -4906,7 +5364,8 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
         if (bot->GetTradeData())
         {
             bot->GetTradeData()->SetSpell(spellId);
-			delete spell;
+            restoreSelection();
+            delete spell;
             return true;
         }
     }
@@ -4974,6 +5433,8 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
         if (IsJumping() || bot->IsFalling())
         {
             spell->cancel();
+            restoreSelection();
+            delete spell;
             return false;
         }
 
@@ -4982,12 +5443,11 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
         // fail if not with real player to avoid movement glitches
         if (!HasActivePlayerMaster())
         {
-            if (waitForSpell)
-            {
-                SetAIInternalUpdateDelay(sPlayerbotAIConfig.globalCoolDown);
-            }
+            ScheduleSpellRetry(waitForSpell, nullptr);
 
             spell->cancel();
+            restoreSelection();
+            delete spell;
             return false;
         }
     }
@@ -5038,6 +5498,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
             if (!loot.IsLootPossible(bot))
             {
                 spell->cancel();
+                restoreSelection();
                 //delete spell;
                 return false;
             }
@@ -5045,7 +5506,11 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
     }
 
     if (spellSuccess != SPELL_CAST_OK)
+    {
+        HandleSpellStartFailure(spellSuccess, true, waitForSpell);
+        restoreSelection();
         return false;
+    }
 
     PlayAttackEmote(6);
 
@@ -5060,12 +5525,11 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
     }
 
     if (spell->GetCastTime() || (IsChanneledSpell(pSpellInfo) && GetSpellDuration(pSpellInfo) > 0))
-        aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, target->GetObjectGuid(), time(0));
+        aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, target->GetObjectGuid(), WorldTimer::getMSTime());
 
     aiObjectContext->GetValue<ai::PositionMap&>("position")->Get()["random"].Reset();
 
-    if (oldSel)
-        bot->SetSelectionGuid(oldSel);
+    restoreSelection();
 
     if (HasStrategy("debug spell", BotState::BOT_STATE_NON_COMBAT))
     {
@@ -5109,15 +5573,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, GameObject* goTarget, Item* itemTarg
 
     if (failWithDelay)
     {
-        if (waitForSpell)
-        {
-            SetAIInternalUpdateDelay(sPlayerbotAIConfig.globalCoolDown);
-        }
-
-        if (outSpellDuration)
-        {
-            *outSpellDuration = sPlayerbotAIConfig.globalCoolDown;
-        }
+        ScheduleSpellRetry(waitForSpell, outSpellDuration);
 
         return false;
     }
@@ -5175,6 +5631,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, GameObject* goTarget, Item* itemTarg
         if (IsJumping() || bot->IsFalling())
         {
             spell->cancel();
+            delete spell;
             return false;
         }
 
@@ -5183,19 +5640,20 @@ bool PlayerbotAI::CastSpell(uint32 spellId, GameObject* goTarget, Item* itemTarg
         // fail if not with real player to avoid movement glitches
         if (!HasActivePlayerMaster())
         {
-            if (waitForSpell)
-            {
-                SetAIInternalUpdateDelay(sPlayerbotAIConfig.globalCoolDown);
-            }
+            ScheduleSpellRetry(waitForSpell, nullptr);
 
             spell->cancel();
+            delete spell;
             return false;
         }
     }
 
     SpellCastResult spellSuccess = spell->SpellStart(&targets);
     if (spellSuccess != SPELL_CAST_OK)
+    {
+        HandleSpellStartFailure(spellSuccess, false, waitForSpell);
         return false;
+    }
 
     PlayAttackEmote(6);
 
@@ -5210,7 +5668,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, GameObject* goTarget, Item* itemTarg
     }
 
     if (spell->GetCastTime() || (IsChanneledSpell(pSpellInfo) && GetSpellDuration(pSpellInfo) > 0))
-        aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, goTarget->GetObjectGuid(), time(0));
+        aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, goTarget->GetObjectGuid(), WorldTimer::getMSTime());
 
     aiObjectContext->GetValue<ai::PositionMap&>("position")->Get()["random"].Reset();
 
@@ -5259,15 +5717,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* ite
 
     if (failWithDelay)
     {
-        if (waitForSpell)
-        {
-            SetAIInternalUpdateDelay(sPlayerbotAIConfig.globalCoolDown);
-        }
-
-        if (outSpellDuration)
-        {
-            *outSpellDuration = sPlayerbotAIConfig.globalCoolDown;
-        }
+        ScheduleSpellRetry(waitForSpell, outSpellDuration);
 
         return false;
     }
@@ -5299,12 +5749,16 @@ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* ite
     }
     else
     {
+        spell->cancel();
+        delete spell;
         return false;
     }
 
     if (pSpellInfo->Effect[0] == SPELL_EFFECT_OPEN_LOCK ||
         pSpellInfo->Effect[0] == SPELL_EFFECT_SKINNING)
     {
+        spell->cancel();
+        delete spell;
         return false;
     }
 
@@ -5315,6 +5769,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* ite
         if (IsJumping() || bot->IsFalling())
         {
             spell->cancel();
+            delete spell;
             return false;
         }
 
@@ -5323,17 +5778,25 @@ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* ite
         // fail if not with real player to avoid movement glitches
         if (!HasActivePlayerMaster())
         {
-            if (waitForSpell)
-            {
-                SetAIInternalUpdateDelay(sPlayerbotAIConfig.globalCoolDown);
-            }
+            ScheduleSpellRetry(waitForSpell, nullptr);
 
             spell->cancel();
+            delete spell;
             return false;
         }
     }
 
-    spell->SpellStart(&targets);
+    SpellCastResult spellSuccess = spell->SpellStart(&targets);
+
+    // Coordinate casts historically ignored the SpellStart result. Preserve
+    // that behavior for unknown results, but apply the same typed recovery as
+    // the unit and GameObject overloads for classifications we can prove are
+    // safe.
+    if (spellSuccess != SPELL_CAST_OK && ClassifySpellStartFailure(spellSuccess) != PlayerbotSpellStartFailure::Unknown)
+    {
+        HandleSpellStartFailure(spellSuccess, false, waitForSpell);
+        return false;
+    }
 
     if (pSpellInfo->Effect[0] == SPELL_EFFECT_OPEN_LOCK ||
         pSpellInfo->Effect[0] == SPELL_EFFECT_SKINNING)
@@ -5360,7 +5823,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* ite
         *outSpellDuration = GetSpellCastDuration(spell);
     }
 
-    aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, bot->GetObjectGuid(), time(0));
+    aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, bot->GetObjectGuid(), WorldTimer::getMSTime());
     aiObjectContext->GetValue<ai::PositionMap&>("position")->Get()["random"].Reset();
 
     if (oldSel)
@@ -5653,7 +6116,7 @@ bool PlayerbotAI::CastVehicleSpell(uint32 spellId, Unit* target, float projectil
 
     WaitForSpellCast(spell);
 
-    //aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, target->GetObjectGuid(), time(0));
+    //aiObjectContext->GetValue<LastSpellCast&>("last spell cast")->Get().Set(spellId, target->GetObjectGuid(), WorldTimer::getMSTime());
     //aiObjectContext->GetValue<ai::PositionMap&>("position")->Get()["random"].Reset();
 
     if (HasStrategy("debug spell", BotState::BOT_STATE_NON_COMBAT))
@@ -8122,37 +8585,6 @@ std::list<Unit*> PlayerbotAI::GetAllHostileNPCNonPetUnitsAroundWO(WorldObject* w
     }
 
     return hostileUnitsNonPlayers;
-}
-
-void PlayerbotAI::SendDelayedPacket(WorldSession* session, futurePackets futPackets)
-{
-    std::thread t([session, futPacket = std::move(futPackets)]() mutable {
-        for (auto& delayedPacket : futPacket.get())
-        {
-            if (delayedPacket.second)
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayedPacket.second));
-
-            std::unique_ptr<WorldPacket> packetPtr(new WorldPacket(delayedPacket.first));
-            session->QueuePacket(std::move(packetPtr));
-        }
-    });
-
-    t.detach();
-}
-
-void PlayerbotAI::ReceiveDelayedPacket(futurePackets futPackets)
-{
-    PacketHandlingHelper* handler = &botOutgoingPacketHandlers;
-    std::thread t([handler, futPackets = std::move(futPackets)]() mutable {
-        for (auto& delayedPacket : futPackets.get())
-        {            
-            handler->AddPacket(delayedPacket.first);
-            if(delayedPacket.second)
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayedPacket.second));
-        }
-        });
-
-    t.detach();
 }
 
 PlayerbotHolder* PlayerbotAI::GetHolder() const

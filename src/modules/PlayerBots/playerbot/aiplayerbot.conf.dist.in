@@ -424,6 +424,12 @@ AiPlayerbot.SyncQuestWithPlayer = 0
 # Bot automatically trains spells when talking to trainer (yes = train all available spells as long as the bot has the money, free = auto trains with no money cost, no = only list spells)
 AiPlayerbot.AutoTrainSpells = yes
 
+# When a real master opens gossip with a nearby vendor or repair NPC, controlled group bots can opportunistically
+# sell their normal vendor-trash and repair at that same NPC. This reuses the existing sell/repair rules and does
+# not buy consumables or other vendor items automatically.
+# Default: 1 (enabled)
+AiPlayerbot.AutoMaintenanceOnMasterVendor = 1
+
 # Bot automatically picks talent points based on current spec (full = pick spec based on probability if multiple are like current spec, semi = only apply points if 1 spec looks like current spec, no = no auto talent points)
 AiPlayerbot.AutoPickTalents = full
 
@@ -1036,13 +1042,19 @@ AiPlayerbot.FleeingEnabled = 1
 #AiPlayerbot.AlmostFullHealth = 85
 #AiPlayerbot.LowMana = 15
 #AiPlayerbot.MediumMana = 40
+# Enable healer-specific mana conservation in combat and while preparing buffs.
+AiPlayerbot.AutoSaveMana = 1
+# Below this mana %, healers skip inefficient heals on lightly injured targets (Classic).
+AiPlayerbot.SaveManaThreshold = 60
+# Defer ready-check replies until the bot has refreshed its persistent buffs.
+AiPlayerbot.ForceRebuffOnReadyCheck = 0
 
 # Random bot default strategies (applied after defaults)
-AiPlayerbot.RandomBotCombatStrategies = +dps,+dps assist,-threat,+dungeon
+AiPlayerbot.RandomBotCombatStrategies = +dps,+dps assist,+threat,+dungeon
 AiPlayerbot.RandomBotNonCombatStrategies = +grind,+loot,+custom::say,+tfish,+wander,+rpg craft,+dungeon
 #AiPlayerbot.RandomBotReactStrategies =
 #AiPlayerbot.RandomBotDeadStrategies =
-AiPlayerbot.CombatStrategies = +custom::say,+dps,+dps assist,-threat,+dungeon
+AiPlayerbot.CombatStrategies = +custom::say,+dps,+dps assist,+threat,+dungeon
 AiPlayerbot.NonCombatStrategies = +grind,+loot,+custom::say,+return,+delayed roll,+tfish,+wander,+rpg craft,+quest,+dungeon
 #AiPlayerbot.ReactStrategies = 
 #AiPlayerbot.DeadStrategies = 
@@ -1147,8 +1159,16 @@ AiPlayerbot.UseKnockback = 1
 #AiPlayerbot.LogValuesPerTick = 0
 #AiPlayerbot.RandomChangeMultiplier = 1
 
-# Command server port, 0 - disabled
+# Command server port, 0 - disabled. The server also stays disabled unless a
+# non-empty secret is configured. Clients send the secret as the first line,
+# then continue with the existing command,guid lines.
 #AiPlayerbot.CommandServerPort = 8888
+#AiPlayerbot.CommandServerAddress = 127.0.0.1
+#AiPlayerbot.CommandServerSecret =
+#AiPlayerbot.CommandServerMaxClients = 16
+#AiPlayerbot.CommandServerMaxLineLength = 4096
+#AiPlayerbot.CommandServerMaxResponseLength = 65536
+#AiPlayerbot.CommandServerReadTimeout = 30
 
 AiPlayerbot.PerfMonEnabled = 0
 

@@ -439,25 +439,25 @@ namespace ai
     class CastHolyLightAction : public CastHealingSpellAction
     {
     public:
-        CastHolyLightAction(PlayerbotAI* ai) : CastHealingSpellAction(ai, "holy light") {}
+        CastHolyLightAction(PlayerbotAI* ai) : CastHealingSpellAction(ai, "holy light", 50, HealingManaEfficiency::MEDIUM) {}
     };
 
     class CastHolyLightOnPartyAction : public HealPartyMemberAction
     {
     public:
-        CastHolyLightOnPartyAction(PlayerbotAI* ai) : HealPartyMemberAction(ai, "holy light") {}
+        CastHolyLightOnPartyAction(PlayerbotAI* ai) : HealPartyMemberAction(ai, "holy light", 50, HealingManaEfficiency::MEDIUM) {}
     };
 
     class CastFlashOfLightAction : public CastHealingSpellAction
     {
     public:
-        CastFlashOfLightAction(PlayerbotAI* ai) : CastHealingSpellAction(ai, "flash of light") {}
+        CastFlashOfLightAction(PlayerbotAI* ai) : CastHealingSpellAction(ai, "flash of light", 20, HealingManaEfficiency::LOW) {}
     };
 
     class CastFlashOfLightOnPartyAction : public HealPartyMemberAction
     {
     public:
-        CastFlashOfLightOnPartyAction(PlayerbotAI* ai) : HealPartyMemberAction(ai, "flash of light") {}
+        CastFlashOfLightOnPartyAction(PlayerbotAI* ai) : HealPartyMemberAction(ai, "flash of light", 20, HealingManaEfficiency::LOW) {}
     };
 
     class CastLayOnHandsAction : public CastHealingSpellAction
@@ -620,6 +620,11 @@ namespace ai
     public:
         CastTurnUndeadAction(PlayerbotAI* ai) : CastBuffSpellAction(ai, "turn undead") {}
         virtual Value<Unit*>* GetTargetValue() { return context->GetValue<Unit*>("cc target", getName()); }
+        bool Execute(Event& event) override;
+
+    protected:
+        std::string GetTargetName() override { return "cc target"; }
+        std::string GetTargetQualifier() override { return getName(); }
     };
 
 	class CastHandOfSacrificeAction : public BuffOnPartyAction

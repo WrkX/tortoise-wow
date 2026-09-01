@@ -1,6 +1,7 @@
 #pragma once
 
 #include "playerbot/ServerFacade.h"
+#include "playerbot/PlayerbotAiExtension.h"
 #include "playerbot/strategy/Action.h"
 #include "MovementActions.h"
 #include "playerbot/strategy/values/LastMovementValue.h"
@@ -61,6 +62,13 @@ namespace ai
 
         virtual bool Execute(Event& event) override
         {
+            // isUseful() normally enforces this before the dead engine queues
+            // the action. Keep the guard in Execute as well: DungeonClear's
+            // recovery action and other direct callers must not bypass the
+            // active run's no-release policy.
+            if (sPlayerbotAiExtension.ShouldPreventAutoRelease(bot))
+                return false;
+
             sLog.outDetail("Bot #%d %s:%d <%s> auto released", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName());
 
             WorldPacket packet(CMSG_REPOP_REQUEST);
@@ -96,6 +104,9 @@ namespace ai
                 return !bot->GetCorpse() || !bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST);
 
             if (bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                return false;
+
+            if (sPlayerbotAiExtension.ShouldPreventAutoRelease(bot))
                 return false;
 
             if (!bot->GetGroup())
@@ -148,10 +159,10 @@ namespace ai
         }
     };
 
-    class RepopAction : public SpiritHealerAction
+    class RepopAction : public SpiritHealerAction, public Qualified
     {
     public:
-        RepopAction(PlayerbotAI* ai, std::string name = "repop") : SpiritHealerAction(ai, name) {}
+        RepopAction(PlayerbotAI* ai, std::string name = "repop") : SpiritHealerAction(ai, name), Qualified() {}
 
     public:
         virtual bool Execute(Event& event) override
@@ -227,9 +238,32 @@ namespace ai
                 return false;
 
             if (ai->HasActivePlayerMaster())
-                return false;
+            {
+                // Normal repop remains unavailable with an active player master. The qualified
+                // form is only used after FindCorpseAction has exhausted its bounded attempts to
+                // reach the corpse tracked by the player, including the interval before the ghost
+                // flag is set.
+                return IsUnreachableCorpseRecovery();
+            }
 
             return true;
+        }
+
+        virtual bool isPossible() override
+        {
+            // A dead player cannot necessarily pass MovementAction::isPossible before becoming a
+            // ghost. This recovery does not move, so permit only the same tightly scoped form.
+            if (IsUnreachableCorpseRecovery())
+                return true;
+
+            return SpiritHealerAction::isPossible();
+        }
+
+    private:
+        bool IsUnreachableCorpseRecovery()
+        {
+            return ai->HasActivePlayerMaster() && getQualifier() == "unreachable corpse" &&
+                !sServerFacade.IsAlive(bot) && bot->GetCorpse();
         }
     };
 

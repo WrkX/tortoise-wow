@@ -3,6 +3,7 @@
 /build/
 /build-*/
 /bin/
+/AGENTS.md
 /.vscode/
 *.kate-swp
 *.exe

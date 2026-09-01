@@ -2,6 +2,7 @@
 #include "playerbot/playerbot.h"
 #include "GenericActions.h"
 #include "UseItemAction.h"
+#include "playerbot/strategy/values/GroupCcTargetReservation.h"
 
 using namespace ai;
 
@@ -146,6 +147,20 @@ bool CastSpellAction::isPossible()
 	return ai->CanCastSpell(spellName, spellTarget, 0, nullptr, true);
 }
 
+bool CastCrowdControlSpellAction::Execute(Event& event)
+{
+    Unit* target = GetTarget();
+    if (!GroupCcTargetReservation::PrepareFallbackCast(ai, target))
+        return false;
+
+    if (GroupCcTargetReservation::IsInFlight(bot, target->GetObjectGuid()))
+        return true;
+
+    bool executed = CastSpellAction::Execute(event);
+    GroupCcTargetReservation::RecordCast(bot, target, executed);
+    return executed;
+}
+
 bool CastSpellAction::isUseful()
 {
     if (ai->IsInVehicle() && !ai->IsInVehicle(false, false, true))
@@ -261,6 +276,31 @@ bool CastPetSpellAction::isPossible()
 bool CastAuraSpellAction::isUseful()
 {
     return CastSpellAction::isUseful() && !ai->HasAura(GetSpellName(), GetTarget(), false, isOwner);
+}
+
+bool CastBuffSpellAction::isUseful()
+{
+    Unit* target = GetTarget();
+    if (!target || !CastSpellAction::isUseful())
+        return false;
+
+    if (ai->IsForceRebuffPending() && !ai->IsForceRebuffExpired() && !bot->IsInCombat())
+        return !ai->IsForceRebuffBuffCompleted(GetSpellName(), target);
+
+    return !ai->HasAura(GetSpellName(), target, false, isOwner);
+}
+
+bool CastBuffSpellAction::Execute(Event& event)
+{
+    Unit* target = GetTarget();
+    bool executed = CastSpellAction::Execute(event);
+    if (executed)
+    {
+        ai->NoteForceRebuffBuffWork();
+        ai->MarkForceRebuffBuffCompleted(GetSpellName(), target);
+    }
+
+    return executed;
 }
 
 bool CastMeleeAoeSpellAction::isUseful()
