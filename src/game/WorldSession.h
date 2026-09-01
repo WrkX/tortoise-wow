@@ -794,6 +794,7 @@ class WorldSession
         void HandleGuildQueryOpcode(WorldPacket& recvPacket);
         void HandleGuildCreateOpcode(WorldPacket& recvPacket);
         void HandleGuildInviteOpcode(WorldPacket& recvPacket);
+        void SendGuildInvite(Player* invitee);
         void HandleGuildRemoveOpcode(WorldPacket& recvPacket);
         void HandleGuildAcceptOpcode(WorldPacket& recvPacket);
         void HandleGuildDeclineOpcode(WorldPacket& recvPacket);
@@ -925,7 +926,7 @@ class WorldSession
         void HandleQuestPushResult(WorldPacket& recvPacket);
 
         bool CheckChatMessageValidity(std::string&, uint32, uint32);
-        bool ProcessChatMessageAfterSecurityCheck(std::string&, uint32, uint32);
+        bool ProcessChatMessageAfterSecurityCheck(std::string&, uint32&, uint32&);
         static bool IsLanguageAllowedForChatType(uint32 lang, uint32 msgType);
         void SendPlayerNotFoundNotice(std::string const& name);
         void SendWrongFactionNotice();

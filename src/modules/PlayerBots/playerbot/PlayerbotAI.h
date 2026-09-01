@@ -13,6 +13,7 @@
 #include "strategy/IterateItemsMask.h"
 #include "RandomPlayerbotMgr.h"
 
+#include "playerbot/BotSlots.h"
 class Player;
 class PlayerbotMgr;
 class ChatHandler;
@@ -518,6 +519,13 @@ public:
     bool IsInVehicle(bool canControl = false, bool canCast = false, bool canAttack = false, bool canTurn = false, bool fixed = false, std::string vehicleName = "");
 
     uint32 GetEquipGearScore(Player* player, bool withBags, bool withBank);
+    // mod-playerbots short forms.
+    uint32 GetEquipGearScore(Player* player) { return GetEquipGearScore(player, false, false); }
+    std::vector<Player*> GetRealPlayersInGroup();
+    // mod-playerbots short forms: the error goes to the master, the cast
+    // check uses effect mask 0 (any effect).
+    bool TellError(std::string text) { return TellError(GetMaster(), text); }
+    bool CanCastSpell(std::string name, Unit* target) { return CanCastSpell(name, target, 0); }
     uint32 GetEquipStatsValue(Player* player);
     bool HasSkill(SkillType skill);
     bool IsAllowedCommand(std::string text);
@@ -579,6 +587,10 @@ public:
     // cpp can build heartbeat / debug payloads without being
     // a friend class. Read-only.
     Engine* GetCurrentEngine() { return currentEngine; }
+    // Read-only per-state access for module diagnostics (mod-dungeon-clear's
+    // strategy gate dumps what an engine actually carries when HasStrategy
+    // disagrees with observed behavior).
+    Engine* GetEngine(BotState type) { return engines[(uint8)type]; }
 
     // Heartbeat-cadence accumulator used by ::TickHeartbeat.
     // Public so the helper can advance it in-place every UpdateAI tick;
@@ -640,9 +652,9 @@ public:
     }
     bool IsSelfMaster() { return master ? (master == bot) : false; }
     //Bot has a master that is a player.
-    bool HasRealPlayerMaster() { return master && (!master->GetPlayerbotAI() || master->GetPlayerbotAI()->IsRealPlayer()); } 
+    bool HasRealPlayerMaster() { return master && (!GetBotAI(master) || GetBotAI(master)->IsRealPlayer()); } 
     //Bot has a master that is actively playing.
-    bool HasActivePlayerMaster() const { return master && !master->GetPlayerbotAI(); }
+    bool HasActivePlayerMaster() const { return master && !GetBotAI(master); }
     //Checks if the bot is summoned as alt of a player
     bool IsAlt() { return HasRealPlayerMaster() && !sRandomPlayerbotMgr.IsRandomBot(bot); }
     //Get the group leader or the master of the bot.
@@ -692,6 +704,13 @@ public:
         this->master = m;
         this->masterGuid = m ? m->GetObjectGuid() : ObjectGuid();
     }
+
+    // Null `master` if the Player it points at is gone. Was an inline block at
+    // the top of UpdateAI; it is a method now because the TICK is not the only
+    // path that dereferences the pointer - the LOGOUT path does too, and that is
+    // exactly where a master who just disconnected leaves a dangling pointer
+    // behind (see PlayerbotHolder::LogoutPlayerBot).
+    void RevalidateMasterPointer();
     AiObjectContext* GetAiObjectContext() { return aiObjectContext; }
     void SetAiObjectContext(AiObjectContext* aiObjectContext) { this->aiObjectContext = aiObjectContext; }
     ChatHelper* GetChatHelper() { return &chatHelper; }
@@ -745,6 +764,16 @@ public:
         // strategy in AiFactory, and survives ResetStrategies() - which is the
         // whole point, since that runs whenever the master changes, i.e. right
         // when the bot joins the player's group.
+        // Modules set this while a bot runs an activity that stands the
+        // party on top of TELEPORT areatriggers (a dungeon-clear run parks
+        // right at instance entrances/exits): the stock "area trigger" relay
+        // must not port such a bot out mid-run - live, the run's tank walked
+        // into the Deadmines exit trigger and vanished ("leader tank
+        // vanished"; caught by a gdb trap on Player::TeleportTo under
+        // AreaTriggerAction::Execute). See that action for the gate.
+        void SetSuppressAreaTriggerRelay(bool on) { m_suppressAreaTriggerRelay = on; }
+        bool IsAreaTriggerRelaySuppressed() const { return m_suppressAreaTriggerRelay; }
+
         void SetForcedRole(uint8 role) { m_forcedRole = role; }
         uint8 GetForcedRole() const { return m_forcedRole; }
     void UpdateTalentSpec(PlayerTalentSpec spec = PlayerTalentSpec::TALENT_SPEC_INVALID);
@@ -777,6 +806,7 @@ protected:
 	Player* bot;
 	Player* master;
 	uint8 m_forcedRole = 0;
+	bool m_suppressAreaTriggerRelay = false;
 	// GUID-shadow of `master` so we can verify the pointer is still
 	// alive each tick without dereferencing it. Set in SetMaster().
 	// Used by RevalidateMasterPointer() at the top of UpdateAI.

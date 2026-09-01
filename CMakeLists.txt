@@ -32,12 +32,29 @@ set(CMAKE_MODULE_PATH
   ${CMAKE_SOURCE_DIR}/cmake
 )
 
+include(ConfigureModules)
+
 set(SUPPORTED_CLIENT_BUILD "CLIENT_BUILD_1_12_1" CACHE STRING "Client version the core will support")
 option(USE_STD_MALLOC "Use standard malloc instead of TBB" ON)
 option(TBB_DEBUG "Use TBB debug librairies" OFF)
 option(USE_ANTICHEAT "Use anticheat" ON)
 option(USE_DISCORD_BOT "Use Discord Bot" OFF)
 option(USE_SCRIPTS "Compile scripts" ON)
+option(BUILD_ELUNA "Build the Eluna Lua scripting engine" ON)
+option(BUILD_ELUNA_TESTS "Build the Eluna Lua runtime smoke test" ON)
+set(ELUNA_LUA_VERSION "lua52" CACHE STRING "Lua runtime used by Eluna (lua51, lua52, lua53, or lua54)")
+set_property(CACHE ELUNA_LUA_VERSION PROPERTY STRINGS lua51 lua52 lua53 lua54)
+
+if(BUILD_ELUNA)
+  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/modules/Eluna/LuaEngine.h")
+    message(FATAL_ERROR
+      "Eluna submodule is missing. Run: git submodule update --init --recursive src/modules/Eluna")
+  endif()
+  if(BUILD_ELUNA_TESTS)
+    enable_testing()
+  endif()
+endif()
+set(MODULES "disabled" CACHE STRING "Module build mode: disabled, static, dynamic, or default.")
 option(USE_EXTRACTORS "Compile extractors" OFF)
 option(USE_TRACY "Use Tracy Profiling" OFF)
 option(USE_LIBCURL "Compile with libcurl for email support" OFF)
@@ -52,6 +69,7 @@ option(ALLOW_TURTLE_ADDONS "Allow Turtle addons" ON)
 # AiPlayerbot.Enabled in aiplayerbot.conf.
 option(BUILD_PLAYERBOTS "Build the cmangos/playerbots subsystem" OFF)
 
+ConfigureModuleBuildOptions()
 
 if(UNIX)
   option(DEBUG_SYMBOLS "Include Debug Symbols" ON)
@@ -87,6 +105,7 @@ if(USE_LIBCURL)
   find_package(CURL REQUIRED)
   #add_definitions(-D_HAS_AUTO_PTR_ETC) # for VS2017 ACE support, won't do any harm to other compilers
   #set(CMAKE_CXX_STANDARD 17)
+
   #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++17")
 endif()
 
@@ -100,11 +119,25 @@ endif()
 
 # Giperion: Enable C++17
 set(CMAKE_CXX_STANDARD 17)
+
+# Detour: virtual query filters. Off, dtQueryFilter::getCost is non-virtual and
+# a derived filter (mod-dungeon-clear routes around no-go zones with one) would
+# compile against the base and silently never be called - paths would ignore
+# every zone the filter exists to avoid. Global on purpose: every translation
+# unit that includes DetourNavMeshQuery.h must agree on the class layout, or
+# this is an ODR break. Costs a virtual call per polygon test in all
+# pathfinding; AzerothCore ships with exactly this on.
+add_definitions(-DDT_VIRTUAL_QUERYFILTER=1)
+
 if(MSVC)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++17")
 endif(MSVC)
 if(NOT MSVC)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
+# The Detour virtual-filter switch rides the same flags line the C++ standard
+# does: add_definitions provably does not survive to the subdirectory targets
+# in this tree (checked in flags.make), this line provably does.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDT_VIRTUAL_QUERYFILTER=1")
 endif()
 # Giperion: Set Edit and Continue by default for all windows debug builds
 if(MSVC AND NOT USE_ADDRESS_SANITIZER)
@@ -408,6 +441,33 @@ else()
   message(STATUS "Build scripts         : No")
 endif()
 
+if(BUILD_ELUNA)
+  message(STATUS "Build Eluna           : Yes (Lua ${ELUNA_LUA_VERSION})")
+else()
+  message(STATUS "Build Eluna           : No")
+endif()
+
+if(MODULES_MODULE_LIST)
+  message(STATUS "Build modules         : ${MODULES}")
+  foreach(SOURCE_MODULE ${MODULES_MODULE_LIST})
+    ModuleNameToVariable("${SOURCE_MODULE}" MODULE_VARIABLE)
+    if("${${MODULE_VARIABLE}}" STREQUAL "default")
+      set(MODULE_EFFECTIVE_LINKAGE "${MODULES_DEFAULT_LINKAGE}")
+    else()
+      set(MODULE_EFFECTIVE_LINKAGE "${${MODULE_VARIABLE}}")
+    endif()
+    message(STATUS "  ${SOURCE_MODULE}: ${MODULE_EFFECTIVE_LINKAGE} (${MODULE_VARIABLE}=${${MODULE_VARIABLE}})")
+  endforeach()
+else()
+  message(STATUS "Build modules         : ${MODULES} (no modules found)")
+endif()
+
+if(MODULES_DYNAMIC_LINKING_REQUIRED)
+  message(STATUS "Module dynamic linking: Required")
+else()
+  message(STATUS "Module dynamic linking: Not required")
+endif()
+
 if(USE_DISCORD_BOT)
   message(STATUS "Build Discord Bot     : Yes")
   add_compile_definitions(USING_DISCORD_BOT)
@@ -587,6 +647,7 @@ endif()
 set(DEFINITIONS
   ${DEFINITIONS}
   DO_MYSQL
+  TW_SOURCE_MODULES_DIR="${CMAKE_SOURCE_DIR}/modules"
 )
 
 if(WIN32)
@@ -595,6 +656,13 @@ if(WIN32)
 else()
   set(DEFINITIONS ${DEFINITIONS} SYSCONFDIR="${CONF_DIR}/")
 endif()
+
+if(TW_MODULE_CONFIG_LIST)
+  string(REPLACE ";" "," TW_MODULE_CONFIG_LIST_CSV "${TW_MODULE_CONFIG_LIST}")
+else()
+  set(TW_MODULE_CONFIG_LIST_CSV "")
+endif()
+set(DEFINITIONS ${DEFINITIONS} TW_MODULE_CONFIG_LIST="${TW_MODULE_CONFIG_LIST_CSV}")
 
 if(USE_STD_MALLOC)
   set(DEFINITIONS ${DEFINITIONS} USE_STANDARD_MALLOC)
@@ -618,6 +686,41 @@ message(STATUS "Build flags (DEBUG)   : ${CMAKE_CXX_FLAGS_DEBUG}")
 
 add_subdirectory(src)
 add_subdirectory(dep)
+add_subdirectory(modules)
+
+if(TARGET mangosd AND TARGET modules)
+  target_link_libraries(mangosd modules)
+endif()
+
+if(TARGET mangosd AND WORLDSERVER_DYNAMIC_MODULES_DEPENDENCIES)
+  add_dependencies(mangosd ${WORLDSERVER_DYNAMIC_MODULES_DEPENDENCIES})
+endif()
+
+if(TARGET mangosd)
+  if(WORLDSERVER_DYNAMIC_MODULES)
+    string(REPLACE ";" "," TW_DYNAMIC_MODULES_CSV "${WORLDSERVER_DYNAMIC_MODULES}")
+  else()
+    set(TW_DYNAMIC_MODULES_CSV "")
+  endif()
+
+  if(WORLDSERVER_ENABLED_MODULES)
+    string(REPLACE ";" "," TW_ENABLED_MODULES_CSV "${WORLDSERVER_ENABLED_MODULES}")
+  else()
+    set(TW_ENABLED_MODULES_CSV "")
+  endif()
+
+  target_compile_definitions(mangosd
+    PRIVATE
+      TW_DYNAMIC_MODULES="${TW_DYNAMIC_MODULES_CSV}"
+      TW_MODULES_BUILD_DIRECTIVE="${CMAKE_BUILD_TYPE}"
+      TW_DYNAMIC_MODULES_INSTALL_DIR="${MODULES_INSTALL_RUNTIME_DIR}")
+
+  if(TARGET shared)
+    target_compile_definitions(shared
+      PRIVATE
+        TW_ENABLED_MODULES="${TW_ENABLED_MODULES_CSV}")
+  endif()
+endif()
 
 # cmangos/playerbots vendored module
 if (BUILD_PLAYERBOTS)

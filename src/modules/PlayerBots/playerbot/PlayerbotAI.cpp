@@ -1,5 +1,6 @@
 #include "PlayerbotMgr.h"
 #include "playerbot/playerbot.h"
+#include "playerbot/AiContextAugment.h"
 #include "playerbot/PerformanceMonitor.h"
 #include <stdarg.h>
 #include <iomanip>
@@ -145,6 +146,8 @@ PlayerbotAI::PlayerbotAI(Player* bot) :
 	accountId = sObjectMgr.GetPlayerAccountIdByGUID(bot->GetObjectGuid());
 
     aiObjectContext = AiFactory::createAiObjectContext(bot, this);
+    // Hand the fresh context to module augmenters - see AiContextAugment.h.
+    RunAiContextAugmenters(this, aiObjectContext);
 
     UpdateTalentSpec();
 
@@ -254,6 +257,21 @@ PlayerbotAI::~PlayerbotAI()
         delete aiObjectContext;
 }
 
+void PlayerbotAI::RevalidateMasterPointer()
+{
+    // The masterGuid shadow (set in SetMaster) is the safe lookup key - the
+    // cached `master` pointer is never dereferenced here. If the Player it named
+    // is gone, or a DIFFERENT live Player now holds that guid, drop both.
+    if (!master)
+        return;
+    Player* live = masterGuid ? sObjectAccessor.FindPlayer(masterGuid) : nullptr;
+    if (live != master)
+    {
+        master = nullptr;
+        masterGuid = ObjectGuid();
+    }
+}
+
 void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
 {
     AiObjectContext* context = aiObjectContext;
@@ -270,15 +288,7 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
     // pointer. We null `master` defensively. The masterGuid shadow
     // (set in SetMaster, see PlayerbotAI.h) is the safe lookup key —
     // we never deref the cached `master` pointer in this check.
-    if (master)
-    {
-        Player* live = masterGuid ? sObjectAccessor.FindPlayer(masterGuid) : nullptr;
-        if (live != master)
-        {
-            master = nullptr;
-            masterGuid = ObjectGuid();
-        }
-    }
+    RevalidateMasterPointer();
 
     if(aiInternalUpdateDelay > elapsed)
     {
@@ -846,7 +856,7 @@ bool PlayerbotAI::IsInRaid()
     bool inRaidFight = false;
     if (IsSafe(bot))
     {
-        const Map* map = bot->GetMap();
+        const Map* map = bot->FindMap();
         if (map && (map->IsDungeon() || map->IsRaid()))
         {
             inRaidFight = true;
@@ -1272,9 +1282,9 @@ void PlayerbotAI::UpdateAIInternal(uint32 elapsed, bool minimal)
 
         if (logout && !bot->GetSession()->ShouldLogOut(time(nullptr)))
         {
-            if (master && master->GetPlayerbotMgr())
+            if (master && GetBotMgr(master))
             {
-                master->GetPlayerbotMgr()->LogoutPlayerBot(bot->GetObjectGuid().GetRawValue());
+                GetBotMgr(master)->LogoutPlayerBot(bot->GetObjectGuid().GetRawValue());
             }
             else
             {
@@ -1590,7 +1600,7 @@ void PlayerbotAI::HandleCommand(uint32 type, const std::string& text, Player& fr
             if (type == CHAT_MSG_WHISPER)
                 TellPlayer(&fromPlayer, BOT_TEXT("logout_start"));
 
-            if (master && master->GetPlayerbotMgr())
+            if (master && GetBotMgr(master))
                 SetShouldLogOut(true);
         }
     }
@@ -1864,7 +1874,7 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
                     if (isFromFreeBot)
                     {
                         Player* player = sObjectMgr.GetPlayer(guid1);
-                        if (player && player->isRealPlayer())
+                        if (player && IsRealPlayer(player))
                             isFromFreeBot = false;
                     }
                 }
@@ -1936,7 +1946,7 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
 
             if (isAiChat)
             {
-                ChatChannelSource chatChannelSource = bot->GetPlayerbotAI()->GetChatChannelSource(bot, msgtype, chanName);
+                ChatChannelSource chatChannelSource = GetBotAI(bot)->GetChatChannelSource(bot, msgtype, chanName);
 
                 std::string llmChannel;
 
@@ -2187,8 +2197,18 @@ void PlayerbotAI::DoNextAction(bool min)
 
     Group *group = bot->GetGroup();
 
+    // A test-harness login keeps its externally-assigned master. The two
+    // self-heals below both fire on the harness setup (the GM driver is
+    // deliberately neither a group member nor the group leader): the first
+    // cleared the master and RESET STRATEGIES, the harness's react-delay
+    // repair reinstated the master a tick later, and the pair ping-ponged
+    // once per second on every run member (gdb backtrace 2026-08-24,
+    // 500+ resets per bot in 8 minutes, action queue wiped each pass).
+    bool const externallyManagedMaster =
+        sRandomPlayerbotMgr.IsExternallyManaged(bot->GetGUIDLow());
+
     //Remove bot masters not in our group.
-    if (master && master != bot && !HasActivePlayerMaster() && (!group || group->GetLeaderGuid() != master->GetObjectGuid()))
+    if (!externallyManagedMaster && master && master != bot && !HasActivePlayerMaster() && (!group || group->GetLeaderGuid() != master->GetObjectGuid()))
     {
         master = IsRealPlayer() ? bot : nullptr;
         SetMaster(master);
@@ -2196,14 +2216,14 @@ void PlayerbotAI::DoNextAction(bool min)
     }
 
     // test BG master set
-    if ((!master || !HasActivePlayerMaster()) && group && !IsRealPlayer())
+    if (!externallyManagedMaster && (!master || !HasActivePlayerMaster()) && group && !IsRealPlayer())
     {
         //Ideally we want to have the leader as master.
         Player* newMaster = GetGroupMaster();
         Player* playerMaster = nullptr;
 
         //Are there any non-bot players in the group?
-        if (!newMaster || newMaster->GetPlayerbotAI())
+        if (!newMaster || GetBotAI(newMaster))
             for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
             {
                 Player* member = gref->getSource();
@@ -2224,14 +2244,14 @@ void PlayerbotAI::DoNextAction(bool min)
                     continue;
 
                 //Do not make bots your master if they are nog group leader.
-                if (member->GetPlayerbotAI() && !bot->InBattleGround())
+                if (GetBotAI(member) && !bot->InBattleGround())
                     continue;
 
                 if (bot->InBattleGround())
                     continue;
 
                 // same BG
-                if (bot->InBattleGround() && bot->GetBattleGround()->GetTypeId() == BATTLEGROUND_AV && !member->GetPlayerbotAI() && member->InBattleGround() && bot->GetMapId() == member->GetMapId())
+                if (bot->InBattleGround() && bot->GetBattleGround()->GetTypeId() == BATTLEGROUND_AV && !GetBotAI(member) && member->InBattleGround() && bot->GetMapId() == member->GetMapId())
                 {
                     // TODO disable move to objective if have master in bg
                     continue;
@@ -2330,7 +2350,7 @@ void PlayerbotAI::DoNextAction(bool min)
 
         if (!group && sRandomPlayerbotMgr.IsFreeBot(bot) && !IsRealPlayer())
         {
-            bot->GetPlayerbotAI()->SetMaster(nullptr);
+            GetBotAI(bot)->SetMaster(nullptr);
         }
 	}
 	else if (bot->m_movementInfo.HasMovementFlag(MOVEFLAG_WALK_MODE)) bot->m_movementInfo.RemoveMovementFlag(MOVEFLAG_WALK_MODE);
@@ -2642,7 +2662,7 @@ void PlayerbotAI::ResetStrategies(bool autoLoad)
 
 bool PlayerbotAI::IsRanged(Player* player, bool inGroup)
 {
-    PlayerbotAI* botAi = player->GetPlayerbotAI();
+    PlayerbotAI* botAi = GetBotAI(player);
     if (botAi)
     {
         bool isRanged = botAi->ContainsStrategy(STRATEGY_TYPE_RANGED);
@@ -2672,7 +2692,7 @@ bool PlayerbotAI::IsMelee(Player* player, bool inGroup)
 
 bool PlayerbotAI::IsTank(Player* player, bool inGroup)
 {
-    PlayerbotAI* botAi = player->GetPlayerbotAI();
+    PlayerbotAI* botAi = GetBotAI(player);
     if (botAi)
     {
         bool isTank = botAi->ContainsStrategy(STRATEGY_TYPE_TANK);
@@ -2687,7 +2707,7 @@ bool PlayerbotAI::IsTank(Player* player, bool inGroup)
 
 bool PlayerbotAI::IsHeal(Player* player, bool inGroup)
 {
-    PlayerbotAI* botAi = player->GetPlayerbotAI();
+    PlayerbotAI* botAi = GetBotAI(player);
     if (botAi)
     {
         bool isHeal = botAi->ContainsStrategy(STRATEGY_TYPE_HEAL);
@@ -2858,7 +2878,11 @@ Unit* PlayerbotAI::GetUnit(ObjectGuid guid)
     if (!guid)
         return NULL;
 
-    Map* map = bot->GetMap();
+    // FindMap, not GetMap: GetMap asserts on a bot without a map and this
+    // core's MANGOS_ASSERT throws, which killed the server from inside a
+    // loot check while a bot was mid-teleport. The null test right below
+    // has always been here - it just could never fire.
+    Map* map = bot->FindMap();
     if (!map)
         return NULL;
 
@@ -2889,7 +2913,11 @@ Creature* PlayerbotAI::GetCreature(ObjectGuid guid) const
     if (!guid)
         return NULL;
 
-    Map* map = bot->GetMap();
+    // FindMap, not GetMap: GetMap asserts on a bot without a map and this
+    // core's MANGOS_ASSERT throws, which killed the server from inside a
+    // loot check while a bot was mid-teleport. The null test right below
+    // has always been here - it just could never fire.
+    Map* map = bot->FindMap();
     if (!map)
         return NULL;
 
@@ -2901,7 +2929,11 @@ Creature* PlayerbotAI::GetAnyTypeCreature(ObjectGuid guid) const
     if (!guid)
         return NULL;
 
-    Map* map = bot->GetMap();
+    // FindMap, not GetMap: GetMap asserts on a bot without a map and this
+    // core's MANGOS_ASSERT throws, which killed the server from inside a
+    // loot check while a bot was mid-teleport. The null test right below
+    // has always been here - it just could never fire.
+    Map* map = bot->FindMap();
     if (!map)
         return NULL;
 
@@ -2913,7 +2945,11 @@ GameObject* PlayerbotAI::GetGameObject(ObjectGuid guid)
     if (!guid)
         return NULL;
 
-    Map* map = bot->GetMap();
+    // FindMap, not GetMap: GetMap asserts on a bot without a map and this
+    // core's MANGOS_ASSERT throws, which killed the server from inside a
+    // loot check while a bot was mid-teleport. The null test right below
+    // has always been here - it just could never fire.
+    Map* map = bot->FindMap();
     if (!map)
         return NULL;
 
@@ -2943,7 +2979,11 @@ WorldObject* PlayerbotAI::GetWorldObject(ObjectGuid guid)
     if (!guid)
         return NULL;
 
-    Map* map = bot->GetMap();
+    // FindMap, not GetMap: GetMap asserts on a bot without a map and this
+    // core's MANGOS_ASSERT throws, which killed the server from inside a
+    // loot check while a bot was mid-teleport. The null test right below
+    // has always been here - it just could never fire.
+    Map* map = bot->FindMap();
     if (!map)
         return NULL;
 
@@ -2963,7 +3003,7 @@ std::vector<Player*> PlayerbotAI::GetPlayersInGroup()
     {
         Player* member = ref->getSource();
 
-        if (member->GetPlayerbotAI() && !member->GetPlayerbotAI()->IsRealPlayer())
+        if (GetBotAI(member) && !GetBotAI(member)->IsRealPlayer())
             continue;
 
         members.push_back(ref->getSource());
@@ -3573,7 +3613,7 @@ bool PlayerbotAI::SayToParty(std::string msg, bool likePlayer)
     {
         for (auto reciever : GetPlayersInGroup())
         {
-            if (likePlayer || reciever->isRealPlayer())
+            if (likePlayer || IsRealPlayer(reciever))
             {
                 WorldPacket packet_template(CMSG_MESSAGECHAT);
 
@@ -3759,7 +3799,7 @@ bool PlayerbotAI::TellPlayerNoFacing(Player* player, std::string text, Playerbot
         if (type == CHAT_MSG_SYSTEM && (sPlayerbotAIConfig.randomBotSayWithoutMaster || HasStrategy("debug", BotState::BOT_STATE_NON_COMBAT)))
             type = CHAT_MSG_SAY;
 
-        if (type == CHAT_MSG_SYSTEM && player->isRealPlayer())
+        if (type == CHAT_MSG_SYSTEM && IsRealPlayer(player))
             type = CHAT_MSG_WHISPER;
 
         if ((sPlayerbotAIConfig.hasLog("chat_log.csv") && HasStrategy("debug log", BotState::BOT_STATE_NON_COMBAT)) || HasStrategy("debug logname", BotState::BOT_STATE_NON_COMBAT))
@@ -3821,7 +3861,7 @@ bool PlayerbotAI::TellPlayerNoFacing(Player* player, std::string text, Playerbot
                 if (!IsTellAllowed(player, securityLevel))
                     return false;
 
-                if (!HasRealPlayerMaster() && !player->isRealPlayer())
+                if (!HasRealPlayerMaster() && !IsRealPlayer(player))
                     return false;
 
                 whispers[text] = time(0);
@@ -3852,13 +3892,13 @@ bool PlayerbotAI::TellPlayerNoFacing(Player* player, std::string text, Playerbot
 
 bool PlayerbotAI::TellError(Player* player, std::string text, PlayerbotSecurityLevel securityLevel, bool ignoreSilent)
 {
-    if (!IsTellAllowed(player, securityLevel) || !IsSafe(player) || player->GetPlayerbotAI())
+    if (!IsTellAllowed(player, securityLevel) || !IsSafe(player) || GetBotAI(player))
         return false;
 
     if (!ignoreSilent && HasStrategy("silent", BotState::BOT_STATE_NON_COMBAT))
         return false;
 
-    PlayerbotMgr* mgr = player->GetPlayerbotMgr();
+    PlayerbotMgr* mgr = GetBotMgr(player);
     if (mgr) mgr->TellError(bot->GetName(), text);
 
     return false;
@@ -4966,7 +5006,8 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget, bool
 
         if (ObjectGuid guid = bot->m_ObjectSlotGuid[slot])
         {
-            if (GameObject* obj = bot ? bot->GetMap()->GetGameObject(guid) : nullptr)
+            Map* const goMap = bot ? bot->FindMap() : nullptr;
+            if (GameObject* obj = goMap ? goMap->GetGameObject(guid) : nullptr)
             {
                 //Object is not mine because I created an object with same guid on different map. 
                 //Make object mine, remove it from my list and give it back to the original owner.
@@ -6223,7 +6264,7 @@ ActivePiorityType PlayerbotAI::GetPriorityType()
             if (member == bot)
                 continue;
 
-            if (!member->GetPlayerbotAI() || (member->GetPlayerbotAI() && member->GetPlayerbotAI()->HasRealPlayerMaster()))
+            if (!GetBotAI(member) || (GetBotAI(member) && GetBotAI(member)->HasRealPlayerMaster()))
                 return ActivePiorityType::IN_GROUP_WITH_REAL_PLAYER;
         }
     }
@@ -6320,7 +6361,9 @@ ActivePiorityType PlayerbotAI::GetPriorityType()
     if (IsInRealGuild())
         return ActivePiorityType::PLAYER_GUILD;
 
-    if (bot->IsBeingTeleported() || !bot->IsInWorld() || !bot->GetMap()->HasRealPlayers())
+    Map* const realMap = bot->FindMap();
+    if (bot->IsBeingTeleported() || !bot->IsInWorld() || !realMap ||
+        !realMap->HasRealPlayers())
         return ActivePiorityType::IN_INACTIVE_MAP;
 
     if (!bot->GetMap()->HasActiveZone(bot->GetZoneId()))
@@ -8118,9 +8161,9 @@ PlayerbotHolder* PlayerbotAI::GetHolder() const
         return &sRandomPlayerbotMgr;
 
     if (bot->GetMaster())
-        return static_cast<Player*>(bot->GetMaster())->GetPlayerbotMgr();
+        return GetBotMgr(static_cast<Player*>(bot->GetMaster()));
 
-    return bot->GetPlayerbotMgr();
+    return GetBotMgr(bot);
 }
 
 std::string PlayerbotAI::InventoryParseOutfitName(std::string outfit)
@@ -8957,4 +9000,23 @@ bool PlayerbotAI::HandleSpellClick(ObjectGuid guid)
     }
 #endif
     return false;
+}
+
+
+// See the declaration: the group members that are actual people. Used by the
+// ported dungeon-clear status publisher to address its addon packets.
+std::vector<Player*> PlayerbotAI::GetRealPlayersInGroup()
+{
+    std::vector<Player*> out;
+    Group* group = bot ? bot->GetGroup() : nullptr;
+    if (!group)
+        return out;
+
+    for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
+    {
+        Player* member = gref->getSource();
+        if (member && IsRealPlayer(member))
+            out.push_back(member);
+    }
+    return out;
 }

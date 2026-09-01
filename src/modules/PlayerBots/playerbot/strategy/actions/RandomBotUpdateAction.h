@@ -3,6 +3,7 @@
 #include "playerbot/RandomPlayerbotMgr.h"
 #include "playerbot/strategy/Action.h"
 
+#include "playerbot/BotSlots.h"
 namespace ai
 {
     class RandomBotUpdateAction : public Action
@@ -16,7 +17,7 @@ namespace ai
             if (!sRandomPlayerbotMgr.IsRandomBot(bot))
                 return false;
 
-            if (bot->GetGroup() && ai->GetGroupMaster() && (!ai->GetGroupMaster()->GetPlayerbotAI() || ai->GetGroupMaster()->GetPlayerbotAI()->IsRealPlayer()))
+            if (bot->GetGroup() && ai->GetGroupMaster() && (!GetBotAI(ai->GetGroupMaster()) || GetBotAI(ai->GetGroupMaster())->IsRealPlayer()))
                 return true;
 
             if (ai->HasPlayerNearby())

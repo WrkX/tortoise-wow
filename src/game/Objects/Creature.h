@@ -218,7 +218,7 @@ struct CreatureInfo
     union { uint32  unit_class = 0; uint32 UnitClass; };
     uint32  unit_flags = 0;                                 // enum UnitFlags mask values
     union { uint32  dynamic_flags = 0; uint32 DynamicFlags; };
-    union { uint32  beast_family = 0; uint32 Family; };
+    union { uint32  beast_family = 0; uint32 Family; uint32 pet_family; };
     union { uint32  trainer_type = 0; uint32 TrainerType; };
     union { uint32  trainer_spell = 0; uint32 TrainerSpell; };
     union { uint32  trainer_class = 0; uint32 TrainerClass; };
@@ -572,6 +572,16 @@ class Creature : public Unit
 
         // CreatureGroups
         CreatureGroup* GetCreatureGroup() const { return m_creatureGroup; }
+        // AzerothCore spelling. Formations and creature groups are one concept
+        // on this core.
+        CreatureGroup* GetFormation() const { return m_creatureGroup; }
+        // AzerothCore spellings.
+        CreatureInfo const* GetCreatureTemplate() const { return GetCreatureInfo(); }
+        bool IsImmuneToPC() const { return HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER); }
+        void SetFaction(uint32 faction) { SetFactionTemplateId(faction); }
+        bool isElite() const { return IsElite(); }
+        bool IsEngaged() const { return IsInCombat(); }
+        bool IsSummon() const { return IsTemporarySummon(); }
         void SetCreatureGroup(CreatureGroup* group) { m_creatureGroup = group; }
         void JoinCreatureGroup(Creature* leader, float dist, float angle, uint32 options);
         void LeaveCreatureGroup();
@@ -602,7 +612,7 @@ class Creature : public Unit
         void SaveHomePosition() { SetHomePosition(GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation()); }
         void SetHomePosition(float x, float y, float z, float o);
         void GetHomePosition(float &x, float &y, float &z, float &o);
-        Position const& GetHomePosition() { return m_homePosition; }
+        Position const& GetHomePosition() const { return m_homePosition; }
         float GetHomePositionO() const { return m_homePosition.o; }
         void ResetHomePosition();
 
@@ -620,6 +630,7 @@ class Creature : public Unit
         bool IsCorpse() const { return GetDeathState() ==  CORPSE; }
         bool IsDespawned() const { return GetDeathState() ==  DEAD; }
         void SetCorpseDelay(uint32 delay) { m_corpseDelay = delay; }
+        uint32 GetCorpseDelay() const { return m_corpseDelay; }
         // cmangos has SetCorpseAccelerationDelay; Penqle has only SetCorpseDelay.
         void SetCorpseAccelerationDelay(uint32 delay) { m_corpseDelay = delay; }
         // IsCritter: cmangos shorthand for type == CREATURE_TYPE_CRITTER.
@@ -719,6 +730,7 @@ class Creature : public Unit
         bool HasSpell(uint32 spellID) const override;
 
         bool UpdateEntry(uint32 entry, const CreatureData* data = nullptr, GameEventCreatureData const* eventData = nullptr, bool preserveHPAndPower = true);
+        bool UpdateEntry(uint32 entry, GameEventCreatureData const* eventData) { return UpdateEntry(entry, nullptr, eventData); }
 
         void ApplyGameEventSpells(GameEventCreatureData const* eventData, bool activated);
         bool UpdateStats(Stats stat) override;
@@ -793,6 +805,8 @@ class Creature : public Unit
         uint32 m_spells[CREATURE_MAX_SPELLS];
 
         float GetAttackDistance(Unit const* pl) const;
+        // AzerothCore spelling.
+        float GetAggroRange(Unit const* target) const { return GetAttackDistance(target); }
         float GetDetectionRange() const { return m_detectionDistance; }
 
         void SendAIReaction(AiReaction reactionType);
@@ -1014,6 +1028,10 @@ class Creature : public Unit
         void RegenerateMana();
 
         void SetVirtualItem(VirtualItemSlot slot, uint32 item_id);
+        void SetVirtualItem(WeaponAttackType slot, uint32 item_id) { SetVirtualItem(static_cast<VirtualItemSlot>(slot), item_id); }
+
+        void SetDisableReputationGain(bool disable) { m_disableReputationGain = disable; }
+        bool IsReputationGainDisabled() const { return m_disableReputationGain; }
 
         void ResetDamageTakenOrigin()
         {
@@ -1144,6 +1162,7 @@ class Creature : public Unit
         uint32 m_mountId;                                   // display Id to mount
 
         bool m_isDeadByDefault;
+        bool m_disableReputationGain = false;
         bool m_AI_locked;
         uint16 m_creatureStateFlags;
         uint32 m_temporaryFactionFlags;                     // used for real faction changes (not auras etc)

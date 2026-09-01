@@ -1,6 +1,7 @@
 #pragma once
 #include "playerbot/strategy/Action.h"
 
+#include "playerbot/BotSlots.h"
 namespace ai
 {
     class GiveItemAction : public Action
@@ -26,9 +27,9 @@ namespace ai
             if (!target)
                 return false;
 
-            bool isBot = target->IsPlayer() && ((Player*)target)->GetPlayerbotAI();
+            bool isBot = target->IsPlayer() && GetBotAI(((Player*)target));
 
-            return !isBot || (isBot && !((Player*)target)->GetPlayerbotAI()->HasCheat(BotCheatMask::item));
+            return !isBot || (isBot && !GetBotAI(((Player*)target))->HasCheat(BotCheatMask::item));
         }
     };
 
@@ -43,9 +44,9 @@ namespace ai
             if (!target)
                 return false;
 
-            bool isBot = target->IsPlayer() && ((Player*)target)->GetPlayerbotAI();
+            bool isBot = target->IsPlayer() && GetBotAI(((Player*)target));
 
-            return !isBot || (isBot && !((Player*)target)->GetPlayerbotAI()->HasCheat(BotCheatMask::item));
+            return !isBot || (isBot && !GetBotAI(((Player*)target))->HasCheat(BotCheatMask::item));
         }
     };
 }

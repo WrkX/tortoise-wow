@@ -50,6 +50,11 @@ Database.AutoUpdate.AuthUpdateName = "auth"
 Database.AutoUpdate.CharUpdateName = "character"
 Database.AutoUpdate.WorldUpdateName = "world"
 
+# Database.AutoUpdate.AllowedModules. Comma-separated module names to include for
+# module SQL updates, or "all" to scan every enabled module.
+
+Database.AutoUpdate.AllowedModules = "all"
+
 # Database.AutoUpdate.SortByName. Controls the order in which SQL migration files are applied.  
 #   0 = Sort by file modification time ascending (oldest first); alphabetical name as tiebreaker. (Default)  
 #   1 = Sort alphabetically by file name ascending; modification time as tiebreaker.  
@@ -648,6 +653,12 @@ DBC.Locale = 255
 # LoadLocales. Whether to load the text locale tables.
 
 LoadLocales = 1
+
+# LoadSpellsFromSql
+#    Load spell data from the world database `spell_template` table instead of Spell.dbc. Mostly here for future developers iterating on this project
+#    Default: 0 - False
+
+LoadSpellsFromSql = 0
 
 # StrictPlayerNames. Limit player name to language specific symbols set, not allow create characters, 
 # and set rename request and disconnect at not allowed symbols name.
@@ -2265,3 +2276,39 @@ ScalarMin20ManHP = 0.1
 ScalarMin20ManDMG = 0.1
 ScalarMin40ManHP = 0.01
 ScalarMin40ManDMG = 0.01
+
+###################################################################################################################
+# ELUNA LUA ENGINE
+#
+# Eluna.Enabled
+#     Enables the Lua engine. Default: 1.
+# Eluna.TraceBack
+#     Includes a Lua debug traceback in script errors. Default: false.
+# Eluna.ReloadCommand
+#     Enables the `.reload eluna` command. Default: true.
+# Eluna.UseUnsafeMethods
+#     Exposes methods that can be harmful or expensive when misused.
+# Eluna.UseDeprecatedMethods
+#     Exposes compatibility methods that may be removed by Eluna.
+# Eluna.OnlyOnMaps
+#     Comma-separated map IDs that receive a Lua state; empty means all maps.
+# Eluna.ScriptPath
+#     Lua script directory, absolute or relative to the server working directory.
+# Eluna.RequirePaths / Eluna.RequireCPaths
+#     Additional Lua and native-module search paths using Lua path patterns.
+# Eluna.ReloadSecurityLevel
+#     Minimum account security for `.reload eluna` (0 player .. 4 console).
+# ElunaErrorLogFile
+#     Dedicated Eluna log file. Empty disables the dedicated file.
+###################################################################################################################
+Eluna.Enabled = 1
+Eluna.TraceBack = false
+Eluna.ReloadCommand = true
+Eluna.UseUnsafeMethods = false
+Eluna.UseDeprecatedMethods = false
+Eluna.OnlyOnMaps = ""
+Eluna.ScriptPath = "./lua_scripts"
+Eluna.RequirePaths = ""
+Eluna.RequireCPaths = ""
+Eluna.ReloadSecurityLevel = 3
+ElunaErrorLogFile = "ElunaErrors.log"

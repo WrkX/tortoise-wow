@@ -3,6 +3,7 @@
 #include "triggers/WorldPacketTrigger.h"
 #include "playerbot/ChatHelper.h"
 
+#include "playerbot/BotSlots.h"
 namespace ai
 {
     class ExternalEventHelper 
@@ -49,7 +50,7 @@ namespace ai
                 return true;
             }
 
-            if (owner->isRealPlayer())
+            if (IsRealPlayer(owner))
             {
                 HandleCommand("c", command, owner);
                 HandleCommand("t", command, owner);

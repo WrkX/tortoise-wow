@@ -687,6 +687,8 @@ class GameObject : public WorldObject
         bool Create(uint32 guidlow, uint32 name_id, Map *map, float x, float y, float z, float ang, float rotation0, float rotation1, float rotation2, float rotation3, uint32 animprogress, GOState go_state);
         void Update(uint32 update_diff, uint32 p_time) override;
         GameObjectInfo const* GetGOInfo() const { return m_goInfo; }
+        // AzerothCore spelling of the flag test on the shared object field.
+        bool HasGameObjectFlag(uint32 flags) const { return HasFlag(GAMEOBJECT_FLAGS, flags); }
 
         bool IsTransport() const;
 
@@ -829,6 +831,8 @@ class GameObject : public WorldObject
         Loot* const m_loot = &loot;
         // GetLinkedTrap: cmangos accesses linked-trap GO. Stub returns nullptr.
         GameObject* GetLinkedTrap() { return nullptr; }
+        Player* GetLootRecipient() const;
+        Group* GetGroupLootRecipient() const;
 
         bool HasQuest(uint32 quest_id) const override;
         bool HasInvolvedQuest(uint32 quest_id) const override;

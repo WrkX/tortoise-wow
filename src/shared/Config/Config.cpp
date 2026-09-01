@@ -21,10 +21,62 @@
 
 #include "Config.h"
 
+#include "Log.h"
 #include "Policies/SingletonImp.h"
+#include <vector>
 
 INSTANTIATE_SINGLETON_2(Config, Config::Lock);
 INSTANTIATE_CLASS_MUTEX(Config, std::shared_mutex);
+
+#ifndef TW_MODULE_CONFIG_LIST
+#define TW_MODULE_CONFIG_LIST ""
+#endif
+
+static char const* GetConfigImportErrorText(int importResult)
+{
+    switch (importResult)
+    {
+        case -1:
+            return "file could not be opened";
+        case -3:
+            return "config has invalid INI syntax";
+        case -4:
+            return "config is missing a section header";
+        default:
+            return "unknown import error";
+    }
+}
+
+std::vector<std::string> Config::GetModuleConfigFiles() const
+{
+    std::vector<std::string> files;
+    std::string const configuredFiles = TW_MODULE_CONFIG_LIST;
+    std::string::size_type start = 0;
+
+    while (start < configuredFiles.size())
+    {
+        std::string::size_type end = configuredFiles.find(',', start);
+        if (end == std::string::npos)
+            end = configuredFiles.size();
+
+        std::string file = configuredFiles.substr(start, end - start);
+        if (!file.empty())
+            files.push_back(file);
+
+        start = end + 1;
+    }
+
+    return files;
+}
+
+std::string Config::GetConfigDirectory() const
+{
+    std::string::size_type separator = mFilename.find_last_of("/\\");
+    if (separator == std::string::npos)
+        return "";
+
+    return mFilename.substr(0, separator + 1);
+}
 
 // Defined here as it must not be exposed to end-users.
 bool Config::GetValueHelper(const char* name, ACE_TString &result)
@@ -150,6 +202,34 @@ bool Config::Reload()
     delete mConf;
     mConf = nullptr;
     return false;
+}
+
+bool Config::LoadModulesConfigs()
+{
+    if (!mConf)
+        return false;
+
+    std::vector<std::string> const moduleConfigFiles = GetModuleConfigFiles();
+    if (moduleConfigFiles.empty())
+        return true;
+
+    std::string const moduleConfigDirectory = GetConfigDirectory() + "modules/";
+
+    for (std::string const& moduleConfigFile : moduleConfigFiles)
+    {
+        std::string const moduleConfigPath = moduleConfigDirectory + moduleConfigFile;
+        ACE_Ini_ImpExp moduleConfigImporter(*mConf);
+
+        int const importResult = moduleConfigImporter.import_config(moduleConfigPath.c_str());
+        if (importResult != 0)
+        {
+            sLog.outError("Could not load module configuration file %s: %s.",
+                moduleConfigPath.c_str(), GetConfigImportErrorText(importResult));
+            return false;
+        }
+    }
+
+    return true;
 }
 
 std::string Config::GetStringDefault(const char* name, const char* def)

@@ -39,6 +39,7 @@
 #include "LFGHandler.h"
 #include "Chat.h"
 #include "Logging/DatabaseLogger.hpp"
+#include "ScriptObjects.h"
 
 #include <array>
 
@@ -165,6 +166,11 @@ bool Group::Create(ObjectGuid guid, const char * name)
 
     _updateLeaderFlag();
 
+    ScriptRegistry<GroupScript>::ForEach([&](GroupScript* script)
+    {
+        script->OnCreate(this, m_leaderGuid, static_cast<uint8>(m_groupType));
+    });
+
     return true;
 }
 
@@ -256,6 +262,11 @@ bool Group::AddInvite(Player *player)
     m_invitees.insert(player);
 
     player->SetGroupInvite(this);
+
+    ScriptRegistry<GroupScript>::ForEach([&](GroupScript* script)
+    {
+        script->OnInviteMember(this, player->GetObjectGuid());
+    });
 
     return true;
 }
@@ -432,6 +443,11 @@ bool Group::AddMember(ObjectGuid guid, const char* name, uint8 joinMethod)
         }
     }
 
+    ScriptRegistry<GroupScript>::ForEach([&](GroupScript* script)
+    {
+        script->OnAddMember(this, guid);
+    });
+
     return true;
 }
 
@@ -505,6 +521,11 @@ uint32 Group::RemoveMember(ObjectGuid guid, uint8 removeMethod)
             sLFGMgr.UpdateGroup(m_Id);
 
         SendUpdate();
+
+        ScriptRegistry<GroupScript>::ForEach([&](GroupScript* script)
+        {
+            script->OnRemoveMember(this, guid, removeMethod);
+        });
     }
     // if group before remove <= 2 disband it
     else
@@ -519,16 +540,27 @@ void Group::ChangeLeader(ObjectGuid guid)
     if (slot == m_memberSlots.end())
         return;
 
+    ObjectGuid oldLeaderGuid = m_leaderGuid;
     _setLeader(guid);
 
     WorldPacket data(SMSG_GROUP_SET_LEADER, slot->name.size() + 1);
     data << slot->name;
     BroadcastPacket(&data, true);
     SendUpdate();
+
+    ScriptRegistry<GroupScript>::ForEach([&](GroupScript* script)
+    {
+        script->OnChangeLeader(this, guid, oldLeaderGuid);
+    });
 }
 
 void Group::Disband(bool hideDestroy, ObjectGuid initiator)
 {
+    ScriptRegistry<GroupScript>::ForEach([&](GroupScript* script)
+    {
+        script->OnDisband(this);
+    });
+
     Player* player;
     Player* remainingPlayer = nullptr;
 
@@ -1436,9 +1468,32 @@ void Group::UpdatePlayerOutOfRange(Player* pPlayer)
     pPlayer->GetSession()->BuildPartyMemberStatsChangedPacket(pPlayer, &data);
 
     for (GroupReference *itr = GetFirstMember(); itr != nullptr; itr = itr->next())
-        if (Player *player = itr->getSource())
-            if (player != pPlayer && !player->IsInVisibleList(pPlayer)) // Possible unsafe call (cross maps groups)
-                player->GetSession()->SendPacket(&data);
+    {
+        Player* player = itr->getSource();
+        if (!player || player == pPlayer)
+            continue;
+
+        // The IsInVisibleList call below reads the OTHER player's client-GUID
+        // set, and that set is rebuilt by the map thread which owns HIM. Doing
+        // it from our thread was flagged here as "possible unsafe call (cross
+        // maps groups)" and it is exactly that: SIGSEGV inside
+        // _Hashtable::find, with ten parallel instance groups whose members
+        // cross map boundaries constantly (crash_2026-08-28_12-42-56).
+        //
+        // Same behaviour, no cross-thread read: a player on a DIFFERENT map
+        // cannot have pPlayer in his visible list at all, so IsInVisibleList
+        // would have answered false and the packet would have gone out anyway.
+        // The call is not replaced, only skipped where its answer is already
+        // known - which is precisely where it was unsafe.
+        if (player->FindMap() != pPlayer->FindMap())
+        {
+            player->GetSession()->SendPacket(&data);
+            continue;
+        }
+
+        if (!player->IsInVisibleList(pPlayer))
+            player->GetSession()->SendPacket(&data);
+    }
 }
 
 void Group::UpdatePlayerOnlineStatus(Player* player, bool online /*= true*/)

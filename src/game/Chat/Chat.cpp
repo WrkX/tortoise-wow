@@ -38,6 +38,16 @@
 #include "PoolManager.h"
 #include "GameEventMgr.h"
 #include "HardcodedEvents.h"
+#include "ScriptObjects.h"
+#ifdef ENABLE_ELUNA
+#include "LuaEngine.h"
+#endif
+
+#include <vector>
+
+#if defined(_MSC_VER) || defined(_WIN32)
+#define strtok_r strtok_s
+#endif
 
 ChatCommand * ChatHandler::getCommandTable()
 {
@@ -579,6 +589,8 @@ ChatCommand * ChatHandler::getCommandTable()
         { "locales_quest",               SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadLocalesQuestCommand,            "", nullptr },
         { "mail_loot_template",          SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadLootTemplatesMailCommand,       "", nullptr },
         { "mangos_string",               SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadMangosStringCommand,            "", nullptr },
+        { "module_string",               SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadModuleStringCommand,            "", nullptr },
+        { "module_string_locale",        SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadModuleStringCommand,            "", nullptr },
         { "npc_gossip",                  SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadNpcGossipCommand,               "", nullptr },
         { "npc_text",                    SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadNpcTextCommand,                 "", nullptr },
         { "npc_trainer",                 SEC_ADMINISTRATOR, true,  &ChatHandler::HandleReloadNpcTrainerCommand,              "", nullptr },
@@ -1003,15 +1015,36 @@ ChatCommand * ChatHandler::getCommandTable()
         { nullptr,          0,                   false, nullptr,                                        "", nullptr }
     };
 
+    static std::vector<ChatCommand> scriptCommandTable;
+    static size_t loadedCommandScriptCount = 0;
     static bool loaded = false;
+    size_t const currentCommandScriptCount = ScriptRegistry<CommandScript>::ScriptPointerList.size();
 
-    if (!loaded)
+    if (!loaded || loadedCommandScriptCount != currentCommandScriptCount)
     {
         loaded = true;
-        FillFullCommandsName(commandTable, "");
+        loadedCommandScriptCount = currentCommandScriptCount;
+        scriptCommandTable.clear();
+
+        for (uint32 i = 0; commandTable[i].Name != nullptr; ++i)
+            scriptCommandTable.push_back(commandTable[i]);
+
+        ScriptRegistry<CommandScript>::ForEach([&](CommandScript* script)
+        {
+            std::vector<ChatCommand> commands = script->GetCommands();
+
+            for (ChatCommand& command : commands)
+            {
+                if (command.Name)
+                    scriptCommandTable.push_back(command);
+            }
+        });
+
+        scriptCommandTable.push_back({ nullptr, 0, false, nullptr, "", nullptr });
+        FillFullCommandsName(scriptCommandTable.data(), "");
     }
 
-    return commandTable;
+    return scriptCommandTable.data();
 }
 
 std::map<uint32 /*Permission Id*/, std::string /*Permission Name*/> ChatHandler::m_rbacPermissionNames;
@@ -1555,6 +1588,22 @@ void ChatHandler::ExecuteCommand(const char* text)
 {
     std::string fullcmd = text;                             // original `text` can't be used. It content destroyed in command code processing.
 
+    char const* commandArgs = text;
+    std::string commandName;
+    while (*commandArgs && *commandArgs != ' ')
+        commandName += *commandArgs++;
+
+    while (*commandArgs == ' ')
+        ++commandArgs;
+
+    bool handledByScript = ScriptRegistry<AllCommandScript>::ForEachWithReturn([&](AllCommandScript* script)
+    {
+        return !script->CanExecuteCommand(this, commandName.c_str(), commandArgs);
+    });
+
+    if (handledByScript)
+        return;
+
     ChatCommand* command = nullptr;
     ChatCommand* parentCommand = nullptr;
 
@@ -1653,6 +1702,11 @@ void ChatHandler::ExecuteCommand(const char* text)
         }
         case CHAT_COMMAND_UNKNOWN_SUBCOMMAND:
         {
+#ifdef ENABLE_ELUNA
+            if (Eluna* e = sWorld.GetEluna())
+                if (!e->OnCommand(m_session ? m_session->GetPlayer() : nullptr, fullcmd.c_str()))
+                    return;
+#endif
             SendSysMessage(LANG_NO_SUBCMD);
             ShowHelpForCommand(command->ChildCommands, text);
             SetSentErrorMessage(true);
@@ -1660,6 +1714,11 @@ void ChatHandler::ExecuteCommand(const char* text)
         }
         case CHAT_COMMAND_UNKNOWN:
         {
+#ifdef ENABLE_ELUNA
+            if (Eluna* e = sWorld.GetEluna())
+                if (!e->OnCommand(m_session ? m_session->GetPlayer() : nullptr, fullcmd.c_str()))
+                    return;
+#endif
             SendSysMessage(LANG_NO_CMD);
             SetSentErrorMessage(true);
             break;
@@ -2547,9 +2606,16 @@ char* ChatHandler::ExtractLiteralArg(char** args, char const* lit /*= nullptr*/)
         return arg;
     }
 
-    char* name = strtok(head, " ");
+    // strtok_r, not strtok: strtok keeps its position in a static, process-wide
+    // pointer, so the second call below resumes wherever the LAST caller left
+    // off - on any thread. This function runs out of every bot's reaction
+    // engine (SpellIdValue -> extractSpellId), i.e. from several map threads at
+    // once, over short-lived std::strings. AddressSanitizer caught exactly
+    // that: strtok reading a buffer another thread had already freed.
+    char* saveptr = nullptr;
+    char* name = strtok_r(head, " ", &saveptr);
 
-    char* tail = strtok(nullptr, "");
+    char* tail = strtok_r(nullptr, "", &saveptr);
 
     *args = tail ? tail : (char*)"";                        // *args don't must be nullptr
 
@@ -3781,4 +3847,3 @@ const char *NullChatHandler::GetMangosString(int32 entry) const
 {
     return sObjectMgr.GetMangosStringForDBCLocale(entry);
 }
-
