@@ -46,6 +46,48 @@ Fixes made while running them:
 | Custom strategies | `+custom::learned` is in the default strategy list, so every bot asked the database twice on every rebuild for action lines that ten characters out of a thousand actually have. The cache meant to prevent that is written by no code path in the tree. Results are remembered now, the empty ones included |
 | Stability | The bot logger passed finished text to `vfprintf` as a format string; any bot name containing `%` aborted the server on MSVC |
 
+### Automated dungeon clearing
+
+`modules/mod-dungeon-clear/` drives a bot party through an instance on its own:
+navigate, pull, fight, loot, move on. It exists because a thousand bots that
+never enter a dungeon only exercise half the server, and because clearing one
+end to end is the hardest thing to ask of bot navigation.
+
+**Rosters are data.** Which creatures count as bosses, and in what order, comes
+from `data/dc_roster.txt` and is applied with `.reload config` — no rebuild:
+
+```
+credit <entry> [<entry> ...]     add creature entries to the credit list
+order  <mapId> <entry> <index>   place an entry in that map's order
+drop   <entry> [<entry> ...]     take entries out again
+```
+
+`drop` exists for rares. A rare in the credit list becomes a required kill, and
+the party then waits for something that is usually not in the instance at all.
+
+**Routes are recorded, not written.** When a boss dies, the path the party
+actually walked is stored as an anchor route under `src/Routes/`, and every
+later run follows it instead of recomputing. A route the stuck-recovery ladder
+runs out on is discarded and relearned by whoever gets through next. A route
+that must not be touched again — a ledge with deep water either side, say —
+takes the word `pinned` in its file header and is then exempt from both
+replacement and discard.
+
+Legs between anchors are pathed rather than walked in a straight line. That
+sounds like a detail and is not: anchors sit 15–20 yards apart, and a chord
+across a curve leaves any strip narrower than the error.
+
+**Set-pieces are declarative.** Where a dungeon needs more than navigation —
+lighting the four Fires of Aku'mai in order, each followed by a wave — the
+sequence is a list of steps (`MoveTo`, `UseGameObject`, `Gossip`, `WaitForSpawn`,
+`WaitForGameObjectState`, `KillCreature`, `ClearRadius`) in
+`Data/Events/`.
+
+**Runs are reproducible.** `.dc test start <dungeon> [seed=N]` starts a
+monitored run; the party composition is drawn from that seed and written into
+the log, so a comp that trips a bug can be replayed exactly. The panel draws
+where every bot stands, one point per bot per second.
+
 ### Server features
 
 All off by default, all in `mangosd.conf`:
@@ -106,10 +148,13 @@ Two are deliberately manual, in `sql/tools/`, because both depend on per-server 
 ### Build and documentation
 
 - Release builds on MSVC ship debug symbols, so a crash dump is readable
+- Eluna is integrated as a pinned Git submodule, built by default, and controlled at
+  runtime by `Eluna.Enabled`. See `docs/ELUNA.md` for checkout, configuration,
+  architecture, compatibility, and update guidance
 - `INSTALL-LINUX.md` and `INSTALL-WINDOWS.md` are start-to-finish walkthroughs, including
   the OpenSSL 3 legacy provider, the database procedure that actually works, and reading a
   crash dump
-- The **world database is in this repository** — `sql/base` holds 186 files, 131 MB, plus
+- The **world database is in this repository** — `sql/base` holds 190 files, 131 MB, plus
   the migrations under `sql/database_updates`. Only client data (maps, DBC, vmaps, mmaps)
   has to be extracted from a game client, with the tools under `tools/`
 
@@ -128,8 +173,15 @@ build it with Nix.
 Everything below is upstream's own documentation and applies to this fork as well.
 ## Client Version
 
-The client version targetted is patch 1.18.1, build 7272  
-Any client that does not match this version or build will likely have a myriad of issues
+> [!CAUTION]
+> The client version targeted is the unmodified 1.18.1.7272 with 2026-04-12 hotfixes client, the final client version of Turtle-WoW.  
+> Any client that does not match the above specifications will likely have a myriad of issues.  
+> Several of the Turtle-WoW successor servers do __not__ offer the correct client version for this project.  
+> Use the [`dbc_verifier.py`](tools/dbc_verification/dbc_verifier.py) script to verify your extracted DBC files are the correct versions.  
+>   
+> You only need to use the `mapextractor` tool to extract all DBC files quickly, not the full vmap extract and build.  
+> A full SHA-256 manifest can be found in the [`DBC verification`](tools/dbc_verification/) folder.  
+> This manifest was retrieved from https://launcher.turtlecraft.gg/api/manifest/EU on 2026-07-14.
 
 ## Additions
 Additions will be added as the core code reaches feature completion
@@ -140,10 +192,7 @@ Additions will be added as the core code reaches feature completion
 - **Leech** - Basic toggleable leech system designed for solo play, found in mangosd.conf
 - **Additional Talent Points** - Mostly used for testing, found in tw_char.characters
 - **[Playerbots][20]** *(this fork)* - Integrated from [r-o-sh's branch](https://github.com/r-o-sh/tortoise-wow/tree/playerbots-integration-gh). Not an experiment: ~1000 of them run permanently and the fork is built around them. Upstream still lists this as planned.
-
-#### Planned Additions
-
-- **[Eluna][19]** - The WoW lua engine
+- **[Eluna][19]** *(this branch)* - Lua scripting through a pinned submodule. The custom Turtle WoW MaNGOS core uses Eluna's VMaNGOS compatibility backend without becoming a VMaNGOS core. Enable it at build time with `BUILD_ELUNA` and at runtime with `Eluna.Enabled`; see `docs/ELUNA.md`.
 
 ## Operating Systems
 

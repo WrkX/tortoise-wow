@@ -54,6 +54,7 @@ class WorldSocket : public MangosSocket<WorldSession, WorldSocket, AuthCrypt>
 
     protected:
         int OnSocketOpen();
+        void OnSocketClose();
         int SendStartupPacket();
 
         int ProcessIncoming (WorldPacket* new_pct);

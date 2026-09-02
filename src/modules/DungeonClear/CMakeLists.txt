@@ -39,6 +39,7 @@ target_include_directories(${LIBRARY_NAME} PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/src/modules/PlayerBots
   ${CMAKE_SOURCE_DIR}/src/modules/PlayerBots/cmangos-compat-stubs
+  ${CMAKE_SOURCE_DIR}/src/modules/Eluna
   ${CMAKE_SOURCE_DIR}/src/game
   ${CMAKE_SOURCE_DIR}/src/game/AI
   ${CMAKE_SOURCE_DIR}/src/game/AuctionHouse
@@ -89,6 +90,9 @@ endif()
 # the entire bots tree whenever AiObjectContext.h changes. mangosd already
 # links playerbots + dungeonclear (--whole-archive).
 target_link_libraries(${LIBRARY_NAME} PRIVATE shared)
+if(TARGET lualib)
+  target_link_libraries(${LIBRARY_NAME} PRIVATE lualib)
+endif()
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/conf/dungeon_clear.conf.dist
   DESTINATION etc

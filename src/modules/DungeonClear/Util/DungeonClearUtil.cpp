@@ -40,7 +40,7 @@ namespace DcUtil
             Player* tank = FindEnabledTank(anyMember);
             if (!tank)
                 tank = anyMember;
-            PlayerbotAI* tankAi = tank->GetPlayerbotAI();
+            PlayerbotAI* tankAi = GetBotAI(tank);
             if (!tankAi || !tankAi->GetAiObjectContext())
                 return nullptr;
             return &tankAi->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();
@@ -51,7 +51,7 @@ namespace DcUtil
     {
         if (!owner || !bot)
             return false;
-        if (PlayerbotAI* oai = owner->GetPlayerbotAI())
+        if (PlayerbotAI* oai = GetBotAI(owner))
         {
             if (oai->GetMaster() != owner)
             {
@@ -74,7 +74,7 @@ namespace DcUtil
         Group* g = anyMember->GetGroup();
         if (!g)
         {
-            if (PlayerbotAI* pai = anyMember->GetPlayerbotAI())
+            if (PlayerbotAI* pai = GetBotAI(anyMember))
             {
                 if (!pai->GetAiObjectContext())
                     return nullptr;
@@ -89,7 +89,7 @@ namespace DcUtil
             Player* m = ref->getSource();
             if (!m || !m->IsInWorld())
                 continue;
-            PlayerbotAI* mai = m->GetPlayerbotAI();
+            PlayerbotAI* mai = GetBotAI(m);
             if (!mai || !mai->IsTank(m))
                 continue;
             AiObjectContext* ctx = mai->GetAiObjectContext();
@@ -110,11 +110,11 @@ namespace DcUtil
             return t;
         Group* g = anyMember->GetGroup();
         if (!g)
-            return anyMember->GetPlayerbotAI() && anyMember->GetPlayerbotAI()->IsTank(anyMember) ? anyMember : nullptr;
+            return GetBotAI(anyMember) && GetBotAI(anyMember)->IsTank(anyMember) ? anyMember : nullptr;
         for (GroupReference* ref = g->GetFirstMember(); ref; ref = ref->next())
         {
             Player* m = ref->getSource();
-            if (m && m->GetPlayerbotAI() && m->GetPlayerbotAI()->IsTank(m))
+            if (m && GetBotAI(m) && GetBotAI(m)->IsTank(m))
                 return m;
         }
         return nullptr;
@@ -125,7 +125,7 @@ namespace DcUtil
         Player* tank = FindEnabledTank(bot);
         if (!tank)
             tank = bot;
-        PlayerbotAI* ai = tank->GetPlayerbotAI();
+        PlayerbotAI* ai = GetBotAI(tank);
         if (!ai || !ai->GetAiObjectContext())
             return nullptr;
         return &ai->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();

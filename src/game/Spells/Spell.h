@@ -3,6 +3,7 @@
  * Copyright (C) 2009-2011 MaNGOSZero <https://github.com/mangos/zero>
  * Copyright (C) 2011-2016 Nostalrius <https://nostalrius.org>
  * Copyright (C) 2016-2017 Elysium Project <https://github.com/elysium-project>
+ * Copyright (C) vMaNGOS contributors <https://github.com/vmangos/core>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -357,7 +358,16 @@ class Spell
 
         Spell(Unit* caster, SpellEntry const *info, bool triggered, ObjectGuid originalCasterGUID = ObjectGuid(), SpellEntry const* triggeredBy = nullptr, Unit* victim = nullptr, SpellEntry const* triggeredByParent = nullptr, bool bCanIgnoreLOS = false);
         Spell(GameObject* caster, SpellEntry const *info, bool triggered, ObjectGuid originalCasterGUID = ObjectGuid(), SpellEntry const* triggeredBy = nullptr, Unit* victim = nullptr, SpellEntry const* triggeredByParent = nullptr, bool bCanIgnoreLOS = false);
-        ~Spell();
+        // VIRTUAL. Spell::Delete() ends in `delete this` on a Spell const*,
+        // and mod-playerbots derives from this class (BotUseItemSpell adds a
+        // bool, making it 760 bytes against Spell's 752). Without a virtual
+        // destructor that delete frees the base size and leaves eight bytes
+        // behind, which corrupts the allocator's bookkeeping - found with
+        // AddressSanitizer as a new-delete-type-mismatch out of
+        // Player::Update -> EventProcessor::Update -> ~SpellEvent. The crash
+        // it caused always surfaced somewhere else entirely, whoever touched
+        // that region next.
+        virtual ~Spell();
 
         SpellCastResult prepare(SpellCastTargets targets, Aura* triggeredByAura = nullptr, uint32 chance = 0);
         SpellCastResult prepare(Aura* triggeredByAura = nullptr, uint32 chance = 0);
@@ -434,6 +444,8 @@ class Spell
         //void HandleAddAura(Unit* Target);
 
         SpellEntry const* m_spellInfo;
+        SpellEntry const* GetSpellProto() const { return m_spellInfo; }
+        SpellEntry const* GetSpellInfo() const { return m_spellInfo; }
         bool m_isCustomSpell = false;
 
         bool m_addThreat = true;

@@ -98,6 +98,8 @@ MangosSocket<SessionType, SocketName, Crypt>::~MangosSocket(void)
 template <typename SessionType, typename SocketName, typename Crypt>
 void MangosSocket<SessionType, SocketName, Crypt>::CloseSocket(void)
 {
+    bool notifyClose = false;
+
     {
         GuardType lock(m_OutBufferLock);
 
@@ -106,6 +108,7 @@ void MangosSocket<SessionType, SocketName, Crypt>::CloseSocket(void)
 
         closing_ = true;
         peer().close_writer();
+        notifyClose = true;
 
         WorldPacket* pct;
         while (m_PacketQueue.dequeue_head(pct) == 0)
@@ -119,6 +122,9 @@ void MangosSocket<SessionType, SocketName, Crypt>::CloseSocket(void)
 
         m_Session = nullptr;
     }
+
+    if (notifyClose)
+        ((SocketName*)this)->OnSocketClose();
 }
 
 template <typename SessionType, typename SocketName, typename Crypt>

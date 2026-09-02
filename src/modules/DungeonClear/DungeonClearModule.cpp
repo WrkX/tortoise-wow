@@ -82,9 +82,9 @@ namespace DungeonClearModule
 
         sRandomPlayerbotMgr.ForEachPlayerbot([](Player* bot)
         {
-            if (!bot || !bot->GetPlayerbotAI())
+            if (!bot || !GetBotAI(bot))
                 return;
-            DcStrategyGate::Reconcile(bot->GetPlayerbotAI(), bot);
+            DcStrategyGate::Reconcile(GetBotAI(bot), bot);
         });
     }
 }

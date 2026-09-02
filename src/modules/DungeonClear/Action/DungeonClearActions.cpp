@@ -564,7 +564,7 @@ bool DungeonClearRecoverAction::Execute(Event& event)
             {
                 if (!member || member->IsAlive())
                     return;
-                if (PlayerbotAI* memberAi = member->GetPlayerbotAI())
+                if (PlayerbotAI* memberAi = GetBotAI(member))
                     released = memberAi->DoSpecificAction("release", event, true) || released;
             };
 
@@ -609,7 +609,7 @@ bool DungeonClearRestPartyAction::Execute(Event& event)
     {
         if (!member || !member->IsAlive() || member->IsInCombat())
             return;
-        PlayerbotAI* memberAi = member->GetPlayerbotAI();
+        PlayerbotAI* memberAi = GetBotAI(member);
         if (!memberAi)
             return;
 

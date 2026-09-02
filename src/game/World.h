@@ -50,6 +50,10 @@
 #include <functional>
 #include <any>
 
+#ifdef ENABLE_ELUNA
+#include "ElunaMgr.h"
+#endif
+
 class Object;
 class WorldSession;
 class Player;
@@ -59,6 +63,9 @@ class World;
 class ChannelBroadcaster;
 // forward-decl so World::GetLFGQueue() return type compiles.
 class LFGQueue;
+#ifdef ENABLE_ELUNA
+class Eluna;
+#endif
 // forward-decl GraveYardData (defined in ObjectMgr.h)
 // so World::WorldGraveyardManagerStub method signature parses without needing the full type.
 struct GraveYardData;
@@ -728,6 +735,7 @@ enum eConfigBoolValues
     CONFIG_BOOL_ENABLE_DYNAMIC_VISIBILITIES,
     CONFIG_BOOL_PRIORITY_QUEUE_ENABLE_IP_PENALTY,
     CONFIG_BOOL_LOAD_LOCALES,
+    CONFIG_BOOL_LOAD_SPELLS_FROM_SQL,
     CONFIG_BOOL_ENABLE_FACTION_BALANCE,
     CONFIG_BOOL_BLOCK_ALL_HANZI,
     CONFIG_BOOL_HOLIDAY_EVENT,
@@ -933,14 +941,10 @@ class World
         // Penqle's LFGQueue lives in LFG/LFGMgr.h. Forward to sLFGMgr.
         // Forward-declare LFGQueue at this scope to avoid requiring full LFGMgr.h include.
         class LFGQueue& GetLFGQueue();
-        // host hook.
-        // Implementation in src/modules/PlayerBots/playerbot/HostHooks.cpp dispatches to bot mgrs.
-        void UpdatePlayerbotsTick(uint32 diff);
-        // One-shot startup hook (called from World::SetInitialWorldSettings) — loads bot config + mgrs.
+        // The one call the core still makes into the bot module: it registers the
+        // module hook objects. The per-tick driver is WorldScript::OnUpdate and the
+        // post-load work is WorldScript::OnStartup, both fired from World.cpp.
         void InitPlayerbotsAtStartup();
-        // Second startup hook — called after sObjectMgr.LoadPlayerInfo() so CreateRandomBots() can
-        // use GetPlayerInfo(race, class) to validate starting positions.
-        void FinalizePlayerbotsPostPlayerInfo();
         uint32 GetCurrentMSTime() const;
         // GetMaxDiff: cmangos exposes max diff for performance dashboard. Stub returns 0.
         uint32 GetMaxDiff() const { return 0; }
@@ -1331,6 +1335,10 @@ class World
         std::atomic_uint64_t m_packetsCount[NUM_MSG_TYPES] = {};
         std::atomic_uint64_t m_packetsSize[NUM_MSG_TYPES] = {};
 
+#ifdef ENABLE_ELUNA
+        Eluna* GetEluna() const { return sElunaMgr->Get(m_elunaInfo); }
+#endif
+
     protected:
         void _UpdateGameTime();
         // callback for UpdateRealmCharacters
@@ -1496,6 +1504,10 @@ class World
         std::unique_ptr<ChannelBroadcaster> m_ChannelBroadcaster;
 
         std::unique_ptr<ThreadPool> m_updateThreads;
+
+#ifdef ENABLE_ELUNA
+        ElunaInfo m_elunaInfo;
+#endif
 };
 
 extern uint32 realmID;

@@ -8,6 +8,10 @@
 #include "ReviveFromCorpseAction.h"
 #include "playerbot/TravelMgr.h"
 
+#include "playerbot/BotSlots.h"
+// The base class. Came in through botpch.h inside the bot library; a module
+// including this header from outside has no botpch.
+#include "GenericActions.h"
 namespace ai
 {
     class ReleaseSpiritAction : public ChatCommandAction
@@ -212,7 +216,7 @@ namespace ai
                 sLog.outDetail("Repop: Teleporting bot #%d %s:%d <%s> to spawn", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName());
                 //teleport bot to spawn
                 bot->TeleportTo(defaultPlayerInfo->mapId, defaultPlayerInfo->positionX, defaultPlayerInfo->positionY, defaultPlayerInfo->positionZ, defaultPlayerInfo->orientation);
-                if (bot->isRealPlayer())
+                if (IsRealPlayer(bot))
                     bot->SendHeartBeat();
             }
             else

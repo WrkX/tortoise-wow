@@ -317,6 +317,7 @@ typedef robin_hood::unordered_map<uint32,ItemLocale> ItemLocaleMap;
 typedef robin_hood::unordered_map<uint32,QuestLocale> QuestLocaleMap;
 typedef robin_hood::unordered_map<uint32,PageTextLocale> PageTextLocaleMap;
 typedef robin_hood::unordered_map<int32,MangosStringLocale> MangosStringLocaleMap;
+typedef robin_hood::unordered_map<std::string, MangosStringLocaleMap> ModuleStringLocaleMap;
 typedef robin_hood::unordered_map<uint32,QuestGreetingLocale> QuestGreetingLocaleMap;
 typedef robin_hood::unordered_map<uint32,GossipMenuItemsLocale> GossipMenuItemsLocaleMap;
 typedef robin_hood::unordered_map<uint32,PointOfInterestLocale> PointOfInterestLocaleMap;
@@ -809,6 +810,12 @@ class ObjectMgr
         void LoadTaxiNodes();
         TaxiNodesEntry const* GetTaxiNodeEntry(uint32 id) const { return id < GetMaxTaxiNodeId() ? m_TaxiNodes[id].get() : nullptr; }
         uint32 GetMaxTaxiNodeId() const { return m_TaxiNodes.size(); }
+        void SetTaxiNodeEntry(uint32 id, std::unique_ptr<TaxiNodesEntry>& entry)
+        {
+            if (m_TaxiNodes.size() <= id)
+                m_TaxiNodes.resize(id + 1);
+            m_TaxiNodes[id] = std::move(entry);
+        }
 
         Quest const* GetQuestTemplate(uint32 quest_id) const
         {
@@ -952,6 +959,7 @@ class ObjectMgr
 
         bool LoadMangosStrings(DatabaseType& db, char const* table, int32 min_value, int32 max_value, bool extra_content);
         bool LoadMangosStrings() { return LoadMangosStrings(WorldDatabase,"mangos_string",MIN_MANGOS_STRING_ID,MAX_MANGOS_STRING_ID, false); }
+        bool LoadModuleStrings();
         void LoadBroadcastTexts();
         void LoadBroadcastTextLocales();
         bool LoadQuestGreetings();
@@ -963,6 +971,17 @@ class ObjectMgr
         void LoadCreatureTemplate(uint32 entry);
         void CheckCreatureTemplate(CreatureInfo* cInfo);
 
+        // The ported dungeon module walks every spawn once at load to join its
+        // boss list with coordinates. Read-only reference; the map is stable
+        // after startup, which is when the module reads it.
+        CreatureDataMap const& GetAllCreatureData() const { return m_CreatureDataMap; }
+        // AzerothCore chains spawns so one respawns another; this core's
+        // creature_linking answers a different question (aggro/despawn ties)
+        // and no table stores respawn links. An empty guid says "no link",
+        // which the one caller treats as the common case.
+        ObjectGuid GetLinkedRespawnGuid(ObjectGuid /*spawn*/) const { return ObjectGuid(); }
+        // The ported zone-line index walks every teleport trigger once at load.
+        AreaTriggerTeleportMap const& GetAllAreaTriggerTeleports() const { return m_AreaTriggerTeleportMap; }
         CreatureInfo const* GetCreatureTemplate(uint32 id) const
         {
             auto itr = m_creatureInfoMap.find(id);
@@ -1259,6 +1278,8 @@ class ObjectMgr
 
         const char *GetMangosString(int32 entry, int locale_idx) const;
         const char *GetMangosStringForDBCLocale(int32 entry) const { return GetMangosString(entry,DBCLocaleIndex); }
+        const char* GetModuleString(std::string const& module, uint32 id, int locale_idx) const;
+        const char* GetModuleString(char const* module, uint32 id, int locale_idx) const { return GetModuleString(std::string(module ? module : ""), id, locale_idx); }
         int32 GetDBCLocaleIndex() const { return DBCLocaleIndex; }
         void SetDBCLocaleIndex(uint32 lang) { DBCLocaleIndex = GetIndexForLocale(LocaleConstant(lang)); }
 
@@ -1511,6 +1532,10 @@ class ObjectMgr
         void LoadPlayerCacheData(uint32 lowGuid = 0);
         PlayerCacheData* GetPlayerDataByGUID(uint32 lowGuid) const;
         PlayerCacheData* GetPlayerDataByName(std::string const& name) const;
+        // Read-only view for modules that walk the whole cache (mod-dungeon-clear
+        // claims offline bot-account characters for its test roster). Same
+        // pattern as GetAllCreatureData / ScriptMgr::GetAllAreaTriggerScripts.
+        PlayerCacheDataMap const& GetAllPlayerCacheData() const { return m_playerCacheData; }
         void GetPlayerDataForAccount(uint32 accountId, std::vector<PlayerCacheData*>& data) const;
         PlayerCacheData* InsertPlayerInCache(Player *pPlayer);
         PlayerCacheData* InsertPlayerInCache(uint32 lowGuid, uint32 race, uint32 _class, uint32 uiGender, uint32 account, std::string const& name, uint32 level, uint32 zoneId, uint8 hardcoreStatus);
@@ -1800,6 +1825,7 @@ class ObjectMgr
         NpcTextMap m_NpcTextMap;
         PageTextLocaleMap m_PageTextLocaleMap;
         MangosStringLocaleMap m_MangosStringLocaleMap;
+        ModuleStringLocaleMap m_ModuleStringLocaleMap;
         BroadcastTextLocaleMap m_BroadcastTextLocaleMap;
         QuestGreetingLocaleMap m_QuestGreetingLocaleMap[QUESTGIVER_TYPE_MAX];
         TrainerGreetingLocaleMap m_TrainerGreetingLocaleMap;

@@ -32,15 +32,15 @@ bool ChatHandler_HandleDungeonClearCommand(ChatHandler* self, char* args)
     }
 
     Player* tank = DcUtil::FindGroupTankBot(player);
-    if (!tank && player->GetPlayerbotAI())
+    if (!tank && GetBotAI(player))
         tank = player;
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
     {
         self->PSendSysMessage("DungeonClear: no bot tank available. Invite a tank bot or enable self-bot.");
         return true;
     }
 
-    PlayerbotAI* tai = tank->GetPlayerbotAI();
+    PlayerbotAI* tai = GetBotAI(tank);
     Event ev(sub.empty() ? "dc status" : ("dc " + sub), rest, player);
 
     auto run = [&](char const* action)

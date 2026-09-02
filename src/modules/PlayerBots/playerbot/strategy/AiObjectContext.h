@@ -7,6 +7,7 @@
 #include "Strategy.h"
 #include <set>
 
+#include "playerbot/BotSlots.h"
 namespace ai
 {
     class UntypedValue;
@@ -116,6 +117,15 @@ namespace ai
         {
             valueContexts.Add(sharedValues);
         }
+        // Siblings of the value form above. OWNERSHIP FOLLOWS THE FLAG: the
+        // receiving NamedObjectContextList deletes every added context whose
+        // IsShared() is false, so pass a fresh per-bot instance (usual case),
+        // or construct the context with shared=true if one instance really is
+        // handed to many bots. Grown for module-provided strategies (dungeon
+        // clear); the alternative was reaching into these protected lists.
+        virtual void AddShared(NamedObjectContext<Strategy>* shared) { strategyContexts.AddFront(shared); }
+        virtual void AddShared(NamedObjectContext<Action>* shared) { actionContexts.AddFront(shared); }
+        virtual void AddShared(NamedObjectContext<Trigger>* shared) { triggerContexts.AddFront(shared); }
 
         // Used by optional modules (DungeonClear) via PlayerbotAiExtension.
         void AddStrategyContext(NamedObjectContext<Strategy>* ctx) { if (ctx) strategyContexts.Add(ctx); }
@@ -155,14 +165,14 @@ namespace ai
 #define RESET_AI_VALUE(type, name) context->GetValue<type>(name)->Reset()
 #define RESET_AI_VALUE2(type, name, param) context->GetValue<type>(name, param)->Reset()
 
-#define PAI_VALUE(type, name) player->GetPlayerbotAI()->GetAiObjectContext()->GetValue<type>(name)->Get()
-#define PAI_VALUE2(type, name, param) player->GetPlayerbotAI()->GetAiObjectContext()->GetValue<type>(name, param)->Get()
-#define SET_PAI_VALUE(type, name, value) player->GetPlayerbotAI()->GetAiObjectContext()->GetValue<type>(name)->Set(value)
-#define SET_PAI_VALUE2(type, name, param, value) player->GetPlayerbotAI()->GetAiObjectContext()->GetValue<type>(name, param)->Set(value)
-#define PHAS_AI_VALUE(name) player->GetPlayerbotAI()->GetAiObjectContext()->HasValue(name)
-#define PHAS_AI_VALUE2(name, param) player->GetPlayerbotAI()->GetAiObjectContext()->HasValue(name, param)
-#define MAI_VALUE(type, name) master->GetPlayerbotAI()->GetAiObjectContext()->GetValue<type>(name)->Get()
-#define MAI_VALUE2(type, name, param) master->GetPlayerbotAI()->GetAiObjectContext()->GetValue<type>(name, param)->Get()
+#define PAI_VALUE(type, name) GetBotAI(player)->GetAiObjectContext()->GetValue<type>(name)->Get()
+#define PAI_VALUE2(type, name, param) GetBotAI(player)->GetAiObjectContext()->GetValue<type>(name, param)->Get()
+#define SET_PAI_VALUE(type, name, value) GetBotAI(player)->GetAiObjectContext()->GetValue<type>(name)->Set(value)
+#define SET_PAI_VALUE2(type, name, param, value) GetBotAI(player)->GetAiObjectContext()->GetValue<type>(name, param)->Set(value)
+#define PHAS_AI_VALUE(name) GetBotAI(player)->GetAiObjectContext()->HasValue(name)
+#define PHAS_AI_VALUE2(name, param) GetBotAI(player)->GetAiObjectContext()->HasValue(name, param)
+#define MAI_VALUE(type, name) GetBotAI(master)->GetAiObjectContext()->GetValue<type>(name)->Get()
+#define MAI_VALUE2(type, name, param) GetBotAI(master)->GetAiObjectContext()->GetValue<type>(name, param)->Get()
 
 #define GAI_VALUE(type, name) sSharedObjectContext.GetValue<type>(name)->Get()
 #define GAI_VALUE2(type, name, param) sSharedObjectContext.GetValue<type>(name, param)->Get()

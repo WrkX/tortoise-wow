@@ -1,5 +1,7 @@
 #pragma once
 
+#include "playerbot/BotSlots.h"
+
 class Player;
 class PlayerbotMgr;
 class ChatHandler;
@@ -45,7 +47,7 @@ enum spec : uint8 {
 class PlayerbotFactory
 {
 public:
-    PlayerbotFactory(Player* bot, uint32 level, uint32 itemQuality = 0) : level(level), itemQuality(itemQuality), bot(bot), ai(bot->GetPlayerbotAI()) {}
+    PlayerbotFactory(Player* bot, uint32 level, uint32 itemQuality = 0) : level(level), itemQuality(itemQuality), bot(bot), ai(GetBotAI(bot)) {}
 
     static ObjectGuid GetRandomBot();
     static void Init();

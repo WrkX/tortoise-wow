@@ -53,7 +53,7 @@ namespace
 
     bool IsRealPlayer(Player* p)
     {
-        return p && p->IsInWorld() && p->GetSession() && !p->GetPlayerbotAI();
+        return p && p->IsInWorld() && p->GetSession() && !GetBotAI(p);
     }
 
     bool BossAliveNear(Player* bot, DungeonBossInfo const& info)
@@ -496,13 +496,13 @@ namespace DcAddonComm
         for (ObjectGuid guid : tanks)
         {
             Player* bot = ObjectAccessor::FindPlayer(guid);
-            if (!bot || !bot->IsInWorld() || !bot->GetPlayerbotAI())
+            if (!bot || !bot->IsInWorld() || !GetBotAI(bot))
             {
                 std::lock_guard<std::mutex> lock(g_activeMutex);
                 g_activeTanks.erase(guid);
                 continue;
             }
-            PlayerbotAI* ai = bot->GetPlayerbotAI();
+            PlayerbotAI* ai = GetBotAI(bot);
             if (!ai->GetAiObjectContext())
                 continue;
             DcRunState const& st = ai->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();

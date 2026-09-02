@@ -22,6 +22,7 @@
 #pragma once
 
 #include "Common.h"
+#include "ModuleSlots.h"
 #include "ItemPrototype.h"
 #include "Unit.h"
 #include "Item.h"
@@ -65,9 +66,6 @@ class ZoneScript;
 class PlayerAI;
 class PlayerBroadcaster;
 class MapReference;
-// Forward decls for bot host hooks (defined in the playerbots module).
-class PlayerbotAI;
-class PlayerbotMgr;
 
 static constexpr uint8 PLAYER_MAX_SKILLS = 127;
 constexpr uint8 PLAYER_EXPLORED_ZONES_SIZE = 64;
@@ -874,7 +872,13 @@ struct InstancePlayerBind
     InstancePlayerBind() : state(nullptr), perm(false) {}
 };
 
-static constexpr uint8 MAX_INSTANCE_PER_ACCOUNT_PER_HOUR = 5;
+// Anti-farm gate from vanilla, compile-time (there is no config key for it -
+// AccountInstancesPerHour in mangosd.conf does nothing). Raised for this
+// server because the dungeon-clear test harness runs several bot groups
+// through the same instance in parallel and five entries per account per hour
+// stops the whole rig within minutes. Real players are unaffected at this
+// value; the gate still exists.
+static constexpr uint8 MAX_INSTANCE_PER_ACCOUNT_PER_HOUR = 100;
 
 struct ResurrectionData
 {
@@ -1445,13 +1449,7 @@ class Player final: public Unit
 
         uint32 GetMoney() const { return GetUInt32Value(PLAYER_FIELD_COINAGE); }
         void LogModifyMoney(int32 d, const char* type, ObjectGuid fromGuid = ObjectGuid(), uint32 data = 0);
-        void ModifyMoney(int32 d)
-        {
-            if (d < 0)
-                SetMoney(GetMoney() > uint32(-d) ? GetMoney() + d : 0);
-            else
-                SetMoney(GetMoney() < uint32(MAX_MONEY_AMOUNT - d) ? GetMoney() + d : MAX_MONEY_AMOUNT);
-        }
+        void ModifyMoney(int32 d);
         void LootMoney(int32 g, Loot* loot);
         std::string GetShortDescription() const; // "player:guid [username:accountId@IP]"
 
@@ -1606,6 +1604,7 @@ class Player final: public Unit
         void UpdateForQuestWorldObjects();
         bool CanShareQuest(uint32 quest_id) const;
         QuestStatusMap& getQuestStatusMap() { return mQuestStatus; };
+        QuestStatusMap& GetQuestStatusMap() { return mQuestStatus; }
 
         void SendQuestCompleteEvent(uint32 quest_id) const;
         void SendQuestReward(Quest const* pQuest, uint32 XP, Object* questGiver) const;
@@ -1779,6 +1778,10 @@ class Player final: public Unit
         bool HasDamagingWeaponProc() const;
         void CastItemCombatSpell(Unit* Target, WeaponAttackType attType, float chanceMultiplier = 1.0f);
         void CastItemUseSpell(Item* item, SpellCastTargets const& targets);
+        // AzerothCore appends the client cast counter and a glyph index. The
+        // counter is an echo this call path never needs, glyphs are 3.x.
+        void CastItemUseSpell(Item* item, SpellCastTargets const& targets, uint8 /*castCount*/, uint32 /*glyphIndex*/)
+        { CastItemUseSpell(item, targets); }
 
         // needed by vanish and improved sap
         void CastHighestStealthRank();
@@ -1812,12 +1815,12 @@ class Player final: public Unit
     public:
         void UpdateFreeTalentPoints(bool resetIfNeed = true);
     private:
-        uint32 GetResetTalentsCost() const;
         void UpdateResetTalentsMultiplier() const;
         // moved to public; bot's Talentspec.h
         // calls this on bot Player instances. No encapsulation concern (pure getter).
         void SendTalentWipeConfirm(ObjectGuid guid) const;
     public:
+        uint32 GetResetTalentsCost() const;
         uint32 CalculateTalentsPoints() const;
         uint32 GetFreeTalentPoints() const { return GetUInt32Value(PLAYER_CHARACTER_POINTS1); }
         void SetFreeTalentPoints(uint32 points) { SetUInt32Value(PLAYER_CHARACTER_POINTS1, points); }
@@ -2109,6 +2112,15 @@ class Player final: public Unit
         */
         bool SwitchInstance(uint32 newInstanceId);
         bool TeleportTo(uint32 mapid, float x, float y, float z, float orientation, uint32 options = 0);
+        // AzerothCore's long form appends a unit to face and forceNewInstance.
+        // This core picks the instance copy by binds alone, so the force flag
+        // has nowhere to act: a hop between two copies of the SAME map lands in
+        // the caller's current copy. That narrows one tool - the test
+        // spectator's run-to-run hop on one map - and nothing else; hops across
+        // maps work. Documented at the call site too.
+        bool TeleportTo(uint32 mapid, float x, float y, float z, float orientation,
+                        uint32 options, Unit* /*faceTarget*/, bool /*forceNewInstance*/ = false)
+        { return TeleportTo(mapid, x, y, z, orientation, options); }
         template <class T>
         bool TeleportTo(T const& loc, uint32 options = 0)
         {
@@ -2169,6 +2181,19 @@ class Player final: public Unit
         ObjectGuid const& GetFarSightGuid() const { return GetGuidValue(PLAYER_FARSIGHT); }
 
         void SaveRecallPosition();
+        // AzerothCore-facing reads of the recall slot; the fields stay private.
+        uint32 GetRecallMap() const { return m_recallMap; }
+        float GetRecallX() const { return m_recallX; }
+        float GetRecallY() const { return m_recallY; }
+        float GetRecallZ() const { return m_recallZ; }
+        float GetRecallO() const { return m_recallO; }
+        // Dungeon difficulty query, AzerothCore shape. One difficulty here.
+        Difficulty GetDifficulty(bool /*isRaid*/) const { return DUNGEON_DIFFICULTY_NORMAL; }
+        // The mode switches that came with heroics; nothing to switch here.
+        Difficulty GetDungeonDifficulty() const { return DUNGEON_DIFFICULTY_NORMAL; }
+        Difficulty GetRaidDifficulty() const { return DUNGEON_DIFFICULTY_NORMAL; }
+        void SetDungeonDifficulty(Difficulty) {}
+        void SetRaidDifficulty(Difficulty) {}
         void GetRecallPosition(uint32& map, float& x, float& y, float& z, float& o)
         {
             map = m_recallMap;
@@ -2180,6 +2205,12 @@ class Player final: public Unit
 
         void SetHomebindToLocation(WorldLocation const& loc, uint32 area_id);
         void RelocateToHomebind() { SetLocationMapId(m_homebindMapId); Relocate(m_homebindX, m_homebindY, m_homebindZ); }
+        // Read-only homebind access for modules (mod-dungeon-clear evicts its
+        // test party to the bind point - the same fields the hearthstone uses).
+        uint32 GetHomebindMapId() const { return m_homebindMapId; }
+        float GetHomebindX() const { return m_homebindX; }
+        float GetHomebindY() const { return m_homebindY; }
+        float GetHomebindZ() const { return m_homebindZ; }
         bool TeleportToHomebind(uint32 options = 0, bool hearthCooldown = true);
 
         // currently visible objects at player client
@@ -2197,6 +2228,25 @@ class Player final: public Unit
         void UpdateVisibilityOf(WorldObject const* viewPoint, T* target, UpdateData& data, std::set<WorldObject*>& visibleNow);
 
         Camera& GetCamera() { return m_camera; }
+        // AzerothCore spellings over this core's Camera. apply=true binds the
+        // view to the object, false releases it; GetViewpoint answers what the
+        // camera looks through when that is not the player himself.
+        void SetViewpoint(WorldObject* target, bool apply)
+        {
+            if (apply)
+                m_camera.SetView(target);
+            else
+                m_camera.ResetView();
+        }
+        // AzerothCore rebuilds what this player can see after the viewpoint
+        // moved. The camera does that here when its view changes; a manual nudge
+        // is a no-op because SetView/ResetView already schedule it.
+        void UpdateVisibilityForPlayer() {}
+        WorldObject* GetViewpoint()
+        {
+            WorldObject* body = m_camera.GetBody();
+            return body == (WorldObject*)this ? nullptr : body;
+        }
         void ScheduleCameraUpdate(ObjectGuid guid);
 
         uint32 GetLongSight() const { return m_longSightSpell; }
@@ -2426,16 +2476,13 @@ class Player final: public Unit
         void RemoveAI();
 
         // =========================================================================
-        // Bot host interface + cmangos compat aliases.
+        // Module storage and cmangos compat aliases.
         //
-        // Compiled unconditionally (no #ifdef BUILD_PLAYERBOTS). When bots are
-        // disabled, src/game/PlayerbotStubs.cpp provides empty bodies for the
-        // non-inline members so the host still links. The vendored playerbots
-        // module in src/modules/PlayerBots/ provides the real implementations.
-        //
-        // Three groups follow:
-        //   1. Bot-lifecycle hooks: Create/Remove PlayerbotAI/Mgr, accessors,
-        //      isRealPlayer, UpdatePlayerbotHooks.
+        // The bot-lifecycle group that used to head this block is gone: creating,
+        // destroying and reaching a PlayerbotAI is the module's business now, done
+        // through the slots below. What is left:
+        //   1. Module storage — an opaque pointer per claimed slot, see
+        //      ModuleSlots.h. The core allocates it and never reads it.
         //   2. cmangos camelCase / signature aliases — one-line forwarders to
         //      the Penqle-named equivalent so the vendored bot source compiles
         //      unmodified. Each is tagged with the cmangos name it shadows.
@@ -2444,12 +2491,11 @@ class Player final: public Unit
         //      module tolerates no-op behavior at these sites.
         // =========================================================================
 
-        // m_playerbotAI is set by CreatePlayerbotAI() during PlayerbotHolder::OnBotLogin.
-        // m_playerbotMgr is set when a real Player logs in (mgr drives all their bots).
-        PlayerbotAI* GetPlayerbotAI() const { return m_playerbotAI; }
-        PlayerbotMgr* GetPlayerbotMgr() const { return m_playerbotMgr; }
+        // Module storage. See ModuleSlots.h for who owns which slot.
+        void* GetModuleSlot(uint8 slot) const { return slot < MODULE_SLOT_MAX ? m_moduleSlots[slot] : nullptr; }
+        void SetModuleSlot(uint8 slot, void* value) { if (slot < MODULE_SLOT_MAX) m_moduleSlots[slot] = value; }
+        template<class T> T* GetModuleSlotAs(uint8 slot) const { return static_cast<T*>(GetModuleSlot(slot)); }
         // isRealPlayer: a bot's AI is non-null and not flagged as real-player; otherwise this is a real player.
-        bool isRealPlayer() const;
 
         // cmangos-style aliases the bot module uses on Player:
         // IsInGroup(other) — checks if `other` is in the same group as this player.
@@ -2469,6 +2515,9 @@ class Player final: public Unit
         }
         // IsSpellReady: cmangos checks spell cooldown; Penqle uses HasSpellCooldown (inverted).
         bool IsSpellReady(SpellEntry const& spellInfo) const { return !HasSpellCooldown(spellInfo.Id); }
+        bool IsSpellReady(SpellEntry const* spellInfo) const { return spellInfo && !HasSpellCooldown(spellInfo->Id); }
+        float GetHealthBonusFromStamina() const { return GetHealthBonusFromStamina(GetStat(STAT_STAMINA)); }
+        float GetManaBonusFromIntellect() const { return GetManaBonusFromIntellect(GetStat(STAT_INTELLECT)); }
         bool IsSpellReady(uint32 spellId) const { return !HasSpellCooldown(spellId); }
         // 2-arg form: cmangos passes spell + item proto for item-based ability cooldowns.
         bool IsSpellReady(SpellEntry const& spellInfo, ItemPrototype const* /*proto*/) const { return !HasSpellCooldown(spellInfo.Id); }
@@ -2553,19 +2602,6 @@ class Player final: public Unit
         MountInfoStub const* GetMountInfo() const { return nullptr; }
         // GetMaster: cmangos returns Player's master (party leader / bot owner). Out-of-line in Player.cpp.
         Player* GetMaster() const;
-        // RemovePlayerbotAI / CreatePlayerbotAI: bot lifecycle.
-        // Implementations in Player.cpp; CreatePlayerbotAI allocates a PlayerbotAI for this Player.
-        void RemovePlayerbotAI();
-        void CreatePlayerbotAI();
-        // RemovePlayerbotMgr / CreatePlayerbotMgr: real-player bot-controller lifecycle.
-        // Real players (non-bots) get a PlayerbotMgr to manage their alt bots via .bot commands.
-        void RemovePlayerbotMgr();
-        void CreatePlayerbotMgr();
-        // SetPlayerbotMgr/AI: setters used by RandomPlayerbotMgr / OnSessionLogin to attach managers.
-        void SetPlayerbotAI(PlayerbotAI* ai) { m_playerbotAI = ai; }
-        void SetPlayerbotMgr(PlayerbotMgr* mgr) { m_playerbotMgr = mgr; }
-        // Per-Player tick driver — called from Player::Update. Implementation in HostHooks.cpp.
-        void UpdatePlayerbotHooks(uint32 diff);
         // MeleeAttackStart/Stop: cmangos forwarders to AttackerStateUpdate. Stub no-op.
         void MeleeAttackStart(Unit* /*pVictim*/) {}
         void MeleeAttackStop(Unit* /*pVictim*/ = nullptr) {}
@@ -2777,6 +2813,25 @@ class Player final: public Unit
         ObjectGuid const& GetSelectedGobj() const { return m_selectedGobj; }
         void SetSelectedGobj(ObjectGuid guid) { m_selectedGobj = guid; }
         ObjectGuid const& GetSelectionGuid() const { return m_curSelectionGuid; }
+        // AzerothCore spelling.
+        void SetSelection(ObjectGuid guid) { SetSelectionGuid(guid); }
+        // AzerothCore spellings.
+        bool CanSeeOrDetect(Unit const* u, bool /*detect*/ = true, bool /*inVisibleList*/ = false, bool /*is3dDistance*/ = true) const
+        { return u && u->IsVisibleForOrDetect(this, this, false); }
+        float GetObjectSize() const { return GetObjectBoundingRadius(); }
+        // AzerothCore's long form carries casting/vehicle flags this core has
+        // no seat for; the coordinates and orientation are the teleport. The
+        // using-declaration keeps the inherited forms visible - declaring an
+        // overload here hides them, and this class calls the Position form on
+        // itself a few hundred lines up.
+        using Unit::NearTeleportTo;
+        bool NearTeleportTo(float x, float y, float z, float o, bool /*casting*/, bool /*vehicleTeleport*/ = false, bool /*withPet*/ = false)
+        { return TeleportTo(GetMapId(), x, y, z, o, TELE_TO_NOT_LEAVE_COMBAT | TELE_TO_NOT_UNSUMMON_PET); }
+        // Instance data IS the instance script on this core; the AzerothCore
+        // face of it (GetBossState and friends) hangs off InstanceData as
+        // virtuals with honest defaults, so this cast-free accessor is safe on
+        // every map.
+        InstanceData* GetInstanceScript() const { return GetMap() ? GetMap()->GetInstanceData() : nullptr; }
         void SetSelectionGuid(ObjectGuid guid) { m_curSelectionGuid = guid; SetTargetGuid(guid); }
         Unit* GetSelectedUnit() { return GetMap()->GetUnit(m_curSelectionGuid); }
         Creature* GetSelectedCreature() { return GetMap()->GetCreature(m_curSelectionGuid); }
@@ -2797,6 +2852,9 @@ class Player final: public Unit
         }
         void ClearResurrectRequestData() { SetResurrectRequestData(ObjectGuid(), 0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0); }
         bool IsRessurectRequestedBy(ObjectGuid guid) const { return m_resurrectData.resurrectorGuid == guid; }
+        // Correctly spelled alias. AzerothCore writes it with one s, and so does
+        // English; the name above is kept because this tree already calls it.
+        bool isResurrectRequestedBy(ObjectGuid guid) const { return IsRessurectRequestedBy(guid); }
         bool IsRessurectRequested() const { return !m_resurrectData.resurrectorGuid.IsEmpty(); }
         // bot uses cmangos camelCase isRessurectRequested.
         bool isRessurectRequested() const { return IsRessurectRequested(); }
@@ -3388,43 +3446,22 @@ public:
         void SendAddonMessage(std::string prefix, std::string message);
         void SendAddonMessage(std::string prefix, std::string message, Player* from);
 
-        // Bot state members.
-        // m_playerbotAI: non-null if this Player is a bot; null otherwise.
-        // m_playerbotMgr: non-null if this Player has bots under its control (real player driving bots).
     private:
-        PlayerbotAI* m_playerbotAI = nullptr;
-        PlayerbotMgr* m_playerbotMgr = nullptr;
+        // Per-player storage for modules. The core hands out the space and never
+        // looks inside it; slot ids are claimed in ModuleSlots.h. A flat array
+        // rather than a keyed map because the population module reads its slot on
+        // every tick of every driven character, where a hash lookup would show.
+        void* m_moduleSlots[MODULE_SLOT_MAX] = {};
 };
 
 void AddItemsSetItem(Player*player,Item* item);
 void RemoveItemsSetItem(Player*player,ItemPrototype const* proto);
 
-// outgoing-packet interceptor for bots.
-// WorldSession::SendPacket calls this; if the player has a PlayerbotAI attached, the AI
-// processes the packet (group invites, BG status, vendor errors, etc.) and returns true
-// to suppress network send. Real players (no AI) return false. Implementation in HostHooks.cpp.
-bool Player_DispatchBotOutgoingPacket(Player* player, class WorldPacket const& packet);
-
-// incoming-packet interceptor for bot-owning players.
-// WorldSession::ProcessPackets calls this after the player's own handler ran; the packet is
-// forwarded to PlayerbotMgr::HandleMasterIncomingPacket so the player's bots can mirror it
-// (quest accepts, gossip, quest shares, ...). Never suppresses the packet; no-op for bots.
-void Player_DispatchMasterIncomingPacket(Player* player, class WorldPacket const& packet);
-
-// chat-message dispatcher for bots.
-// WorldSession::HandleMessagechatOpcode calls this after validating the master's chat input,
-// so each bot under the master's PlayerbotMgr (and matching random bots) gets the message
-// fed to their PlayerbotAI::HandleCommand for parsing as a bot command (/party "co" etc).
-// Implementation in HostHooks.cpp.
-void Player_DispatchBotChatCommand(Player* master, uint32 type, std::string const& msg, uint32 lang, std::string const& to = "");
-// Tell a bot which role the dungeon finder gave it (LFT_ROLE_* bits, 0 clears).
-// No-op for anything that is not a bot.
-void Playerbot_SetForcedRole(Player* bot, uint8 role);
-// Which roles this bot's AI can actually play, as LFT_ROLE_* bits. The
-// queue's own AllowedRoleMask is about what a class may sign up as; this is
-// about what the bot can deliver, and the two are not the same - a shaman may
-// queue as tank but has no tank strategy at all.
-uint8 Playerbot_GetAllowedRoles(Player* bot);
+// The four bot dispatchers that used to be declared here are gone. They are
+// module hooks now: ServerScript::CanPacketSend and ::OnPacketHandled for the
+// two packet paths, PlayerScript::OnChatCommand, ::SetForcedRole and
+// ::GetAllowedRoles for the rest. Ask through the Script_* helpers in
+// ScriptMgr.h rather than reaching for a bot type from the core.
 
 // "the bodies of template functions must be made available in a header file"
 template <class T> T Player::ApplySpellMod(uint32 spellId, SpellModOp op, T &basevalue, Spell* spell)

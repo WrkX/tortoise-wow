@@ -270,8 +270,8 @@ bool DungeonClear_HandleAddonMessage(Player* player, std::string const& msg)
     if (subCmd == "sync")
     {
         Player* tank = DcUtil::FindGroupTankBot(player);
-        if (tank && tank->GetPlayerbotAI())
-            DcAddonComm::PushSettings(player, tank->GetPlayerbotAI(), tank);
+        if (tank && GetBotAI(tank))
+            DcAddonComm::PushSettings(player, GetBotAI(tank), tank);
         else
         {
             // Keep the settings page usable outside a group.  Cached addon
@@ -292,14 +292,14 @@ bool DungeonClear_HandleAddonMessage(Player* player, std::string const& msg)
 
     Player* tank = DcUtil::FindGroupTankBot(player);
     if (!tank)
-        tank = player->GetPlayerbotAI() ? player : nullptr;
-    if (!tank || !tank->GetPlayerbotAI())
+        tank = GetBotAI(player) ? player : nullptr;
+    if (!tank || !GetBotAI(tank))
     {
         DcAddonComm::SendError(player, "No tank bot found in your group.");
         return true;
     }
 
-    PlayerbotAI* tai = tank->GetPlayerbotAI();
+    PlayerbotAI* tai = GetBotAI(tank);
 
     if (subCmd == "set" || subCmd == "reset")
     {

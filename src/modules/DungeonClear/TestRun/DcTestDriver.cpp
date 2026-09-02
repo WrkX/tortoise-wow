@@ -113,12 +113,12 @@ bool DcTestDriver::Handle(ChatHandler* handler, std::string const& args)
             for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
             {
                 Player* member = ref->getSource();
-                if (member && member != gm && member->GetPlayerbotAI())
+                if (member && member != gm && GetBotAI(member))
                     member->TeleportTo(ent->mapId, ent->x, ent->y, ent->z, 0.0f);
             }
         }
 
-        if (PlayerbotAI* tai = tank->GetPlayerbotAI())
+        if (PlayerbotAI* tai = GetBotAI(tank))
         {
             Event ev("dc on", "", gm);
             if (Action* a = tai->GetAiObjectContext()->GetAction("dc on"))

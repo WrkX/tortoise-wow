@@ -39,14 +39,14 @@ bool DcOnAction::Execute(Event& event)
         return false;
     }
     Player* tank = DcUtil::FindGroupTankBot(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
     {
         if (owner)
             DcAddonComm::SendError(owner, "Need a bot tank in the group.");
         ai->TellError(owner, "Need a bot tank in the group.");
         return false;
     }
-    PlayerbotAI* tai = tank->GetPlayerbotAI();
+    PlayerbotAI* tai = GetBotAI(tank);
     DcUtil::ResetDungeonClearRun(tai, tank);
     DcRunState& st = tai->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();
     uint8& pullMode = tai->GetAiObjectContext()->GetValue<uint8&>(DcKey::PullMode)->Get();
@@ -71,12 +71,12 @@ bool DcOffAction::Execute(Event& event)
         return false;
     Player* tank = DcUtil::FindEnabledTank(bot);
     if (!tank) tank = DcUtil::FindGroupTankBot(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
         return false;
     ObjectGuid tankGuid = tank->GetObjectGuid();
-    DcUtil::DisableDungeonClear(tank->GetPlayerbotAI(), tank, "commanded off");
+    DcUtil::DisableDungeonClear(GetBotAI(tank), tank, "commanded off");
     DcAddonComm::UnmarkActiveTank(tankGuid);
-    DcAddonComm::PushStatus(tank->GetPlayerbotAI(), tank);
+    DcAddonComm::PushStatus(GetBotAI(tank), tank);
     return true;
 }
 
@@ -86,9 +86,9 @@ bool DcPauseAction::Execute(Event& event)
     if (!DcUtil::IsRealCommander(owner, bot))
         return false;
     Player* tank = DcUtil::FindEnabledTank(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
         return false;
-    DcRunState& st = tank->GetPlayerbotAI()->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();
+    DcRunState& st = GetBotAI(tank)->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();
     if (!st.enabled)
         return false;
 
@@ -102,15 +102,15 @@ bool DcPauseAction::Execute(Event& event)
     if (wantResume || (st.paused && !wantPause))
     {
         st.OnResume();
-        DcUtil::TellGroup(tank->GetPlayerbotAI(), tank, "Dungeon clear resumed.");
+        DcUtil::TellGroup(GetBotAI(tank), tank, "Dungeon clear resumed.");
     }
     else
     {
         st.paused = true;
         st.pauseReason = "manual pause";
-        DcUtil::TellGroup(tank->GetPlayerbotAI(), tank, "Dungeon clear paused.");
+        DcUtil::TellGroup(GetBotAI(tank), tank, "Dungeon clear paused.");
     }
-    DcAddonComm::PushStatus(tank->GetPlayerbotAI(), tank);
+    DcAddonComm::PushStatus(GetBotAI(tank), tank);
     return true;
 }
 
@@ -120,9 +120,9 @@ bool DcSkipAction::Execute(Event& event)
     if (!DcUtil::IsRealCommander(owner, bot))
         return false;
     Player* tank = DcUtil::FindEnabledTank(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
         return false;
-    auto* ctx = tank->GetPlayerbotAI()->GetAiObjectContext();
+    auto* ctx = GetBotAI(tank)->GetAiObjectContext();
     auto next = ctx->GetValue<std::optional<DungeonBossInfo>>(DcKey::NextDungeonBoss)->Get();
     if (!next)
         return false;
@@ -134,11 +134,11 @@ bool DcSkipAction::Execute(Event& event)
     // A manual skip must invalidate an in-flight event as well.  Otherwise a
     // conditional event can remain "active" and be rediscovered after its
     // objective was skipped.
-    DcUtil::CancelDungeonClearEvent(tank->GetPlayerbotAI());
+    DcUtil::CancelDungeonClearEvent(GetBotAI(tank));
     ctx->GetValue<std::optional<DungeonBossInfo>>(DcKey::NextDungeonBoss)->Reset();
-    DcUtil::TellGroup(tank->GetPlayerbotAI(), tank, std::string("Skipped: ") + next->name);
-    DcAddonComm::PushStatus(tank->GetPlayerbotAI(), tank);
-    DcAddonComm::PushBossList(tank->GetPlayerbotAI(), tank, true);
+    DcUtil::TellGroup(GetBotAI(tank), tank, std::string("Skipped: ") + next->name);
+    DcAddonComm::PushStatus(GetBotAI(tank), tank);
+    DcAddonComm::PushBossList(GetBotAI(tank), tank, true);
     return true;
 }
 
@@ -148,15 +148,15 @@ bool DcPullModeAction::Execute(Event& event)
     if (!DcUtil::IsRealCommander(owner, bot))
         return false;
     Player* tank = DcUtil::FindGroupTankBot(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
         return false;
-    uint8& mode = tank->GetPlayerbotAI()->GetAiObjectContext()->GetValue<uint8&>(DcKey::PullMode)->Get();
+    uint8& mode = GetBotAI(tank)->GetAiObjectContext()->GetValue<uint8&>(DcKey::PullMode)->Get();
     mode = DcAddonComm::AddonPullKeywordToTortoise(event.getParam(), mode);
-    DcRunState& state = tank->GetPlayerbotAI()->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();
+    DcRunState& state = GetBotAI(tank)->GetAiObjectContext()->GetValue<DcRunState&>(DcKey::RunState)->Get();
     state.pullModeInitialized = true;
     char const* names[] = {"Dynamic", "Leeroy", "Advanced"};
-    DcUtil::TellGroup(tank->GetPlayerbotAI(), tank, std::string("Pull mode: ") + names[mode % 3]);
-    DcAddonComm::PushStatus(tank->GetPlayerbotAI(), tank);
+    DcUtil::TellGroup(GetBotAI(tank), tank, std::string("Pull mode: ") + names[mode % 3]);
+    DcAddonComm::PushStatus(GetBotAI(tank), tank);
     return true;
 }
 
@@ -167,7 +167,7 @@ bool DcStatusAction::Execute(Event& event)
         return false;
     Player* tank = DcUtil::FindEnabledTank(bot);
     if (!tank) tank = DcUtil::FindGroupTankBot(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
     {
         if (!IsSilent(event))
             ai->TellPlayerNoFacing(owner, "DC: no tank bot.");
@@ -175,7 +175,7 @@ bool DcStatusAction::Execute(Event& event)
         return true;
     }
 
-    PlayerbotAI* tai = tank->GetPlayerbotAI();
+    PlayerbotAI* tai = GetBotAI(tank);
     DcAddonComm::PushStatus(tai, tank);
 
     if (!IsSilent(event))
@@ -209,7 +209,7 @@ bool DcBossesAction::Execute(Event& event)
     Player* tank = DcUtil::FindEnabledTank(bot);
     if (!tank) tank = DcUtil::FindGroupTankBot(bot);
     if (!tank) tank = bot;
-    PlayerbotAI* tai = tank->GetPlayerbotAI() ? tank->GetPlayerbotAI() : ai;
+    PlayerbotAI* tai = GetBotAI(tank) ? GetBotAI(tank) : ai;
 
     bool silent = IsSilent(event);
     DcAddonComm::PushBossList(tai, tank, silent);
@@ -244,7 +244,7 @@ bool DcGoAction::Execute(Event& event)
         return false;
     Player* tank = DcUtil::FindEnabledTank(bot);
     if (!tank) tank = DcUtil::FindGroupTankBot(bot);
-    if (!tank || !tank->GetPlayerbotAI())
+    if (!tank || !GetBotAI(tank))
         return false;
     std::string param = event.getParam();
     if (param.empty())
@@ -254,7 +254,7 @@ bool DcGoAction::Execute(Event& event)
     if (size_t pos = param.find('\t'); pos != std::string::npos)
         param = param.substr(0, pos);
 
-    auto* ctx = tank->GetPlayerbotAI()->GetAiObjectContext();
+    auto* ctx = GetBotAI(tank)->GetAiObjectContext();
     auto bosses = ctx->GetValue<std::vector<DungeonBossInfo>>(DcKey::DungeonBosses)->Get();
 
     // Addon Go buttons send "entry:encounterIndex" so duplicate creature
@@ -311,7 +311,7 @@ bool DcGoAction::Execute(Event& event)
             // A manually selected route after a stopped run starts a clean
             // run.  Otherwise stale skipped/cleared anchors can make the
             // selected boss appear to vanish immediately.
-            DcUtil::ResetDungeonClearRun(tank->GetPlayerbotAI(), tank);
+            DcUtil::ResetDungeonClearRun(GetBotAI(tank), tank);
             DcRunState& freshState = ctx->GetValue<DcRunState&>(DcKey::RunState)->Get();
             uint8& pullMode = ctx->GetValue<uint8&>(DcKey::PullMode)->Get();
             if (!freshState.pullModeInitialized)
@@ -329,14 +329,14 @@ bool DcGoAction::Execute(Event& event)
             // Manual routing must always cancel an event in flight.  The
             // event runner otherwise has priority over the newly selected
             // encounter on its next tick.
-            DcUtil::CancelDungeonClearEvent(tank->GetPlayerbotAI());
+            DcUtil::CancelDungeonClearEvent(GetBotAI(tank));
             st.selectedBossEntry = b.entry;
             st.selectedBossStateKey = stateKey;
         }
         ctx->GetValue<std::optional<DungeonBossInfo>>(DcKey::NextDungeonBoss)->Reset();
-        DcUtil::TellGroup(tank->GetPlayerbotAI(), tank, std::string("Routing to ") + b.name);
-        DcAddonComm::PushStatus(tank->GetPlayerbotAI(), tank);
-        DcAddonComm::PushBossList(tank->GetPlayerbotAI(), tank, true);
+        DcUtil::TellGroup(GetBotAI(tank), tank, std::string("Routing to ") + b.name);
+        DcAddonComm::PushStatus(GetBotAI(tank), tank);
+        DcAddonComm::PushBossList(GetBotAI(tank), tank, true);
         return true;
     }
     if (owner)
