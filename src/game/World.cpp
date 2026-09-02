@@ -1631,6 +1631,8 @@ void World::LoadConfigSettingsFromFile(bool reload)
     setConfig(CONFIG_UINT32_LFT_BOTFILL_LEVEL_BELOW, "LFT.BotFill.LevelRangeBelow", 2);
     setConfig(CONFIG_UINT32_LFT_BOTFILL_LEVEL_BELOW_HEALER, "LFT.BotFill.LevelRangeBelowHealer", 4);
     setConfig(CONFIG_UINT32_LFT_BOTFILL_LEVEL_ABOVE, "LFT.BotFill.LevelRangeAbove", 6);
+    setConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_AFTER, "LFT.BotFill.ForceAfterSeconds", 30);
+    setConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_COOLDOWN, "LFT.BotFill.ForceCooldownSeconds", 60);
 
     setConfig(CONFIG_UINT32_PERFORMANCE_REPORT_INTERVAL, "Perf.ReportInterval", 600);
     setConfig(CONFIG_UINT32_MAX_GOLD_TRANSFERRED, "Transfer.MaxGold", 300000);

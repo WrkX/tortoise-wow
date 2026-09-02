@@ -29,6 +29,7 @@
 #include "ahbot/AhBot.h"
 #include "BotDiagnostics.h"
 #include "playerbot/BotSlots.h"
+#include "QuestGroupFillService.h"
 
 class PlayerbotWorldScript : public WorldScript
 {
@@ -42,6 +43,7 @@ class PlayerbotWorldScript : public WorldScript
         {
             if (!sPlayerbotAIConfig.enabled)
                 return;
+            RegisterQuestGroupFillService();
             RandomPlayerbotFactory::CreateRandomBots();
             auctionbot.Init();
         }
@@ -51,6 +53,7 @@ class PlayerbotWorldScript : public WorldScript
         {
             if (!sPlayerbotAIConfig.enabled)
                 return;
+            UpdateQuestGroupFillService(diff);
             sRandomPlayerbotMgr.UpdateAI(diff);
             auctionbot.Update();
             sPlayerbotAiExtension.RunWorldUpdate(diff);

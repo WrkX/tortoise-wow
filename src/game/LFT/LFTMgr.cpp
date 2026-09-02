@@ -83,6 +83,13 @@ bool LFTManager::HandleAddonMessage(Player* player, uint32 type, std::string con
         HandleQueueLeave(player);
     else if (fields[0] == "C2S_GET_QUEUE_STATUS")
         HandleGetQueueStatus(player);
+    else if (fields[0] == "C2S_QUEUE_FORCE_BOTS")
+    {
+        if (fields.size() != 1)
+            Send(player, "S2C_QUEUE_FORCE_RESULT;invalid");
+        else
+            Send(player, "S2C_QUEUE_FORCE_RESULT;" + RequestForceBotFill(player));
+    }
     else if (fields[0] == "C2S_ROLECHECK_RESPONSE")
         HandleRolecheckResponse(player, fields);
     else if (fields[0] == "C2S_OFFER_ACCEPT")
@@ -137,6 +144,7 @@ void LFTManager::OnPlayerLogout(ObjectGuid const& guid)
 {
     EnsureListingsLoaded();
     CleanupPlayer(guid);
+    m_forceBotFillCooldowns.erase(guid);
 
     bool changedListings = false;
     for (ListingsMap::iterator itr = m_listings.begin(); itr != m_listings.end();)

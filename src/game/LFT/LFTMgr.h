@@ -37,6 +37,7 @@ class LFTManager
         LFTManager();
 
         bool HandleAddonMessage(Player* player, uint32 type, std::string const& rawMessage);
+        std::string RequestForceBotFill(Player* player);
         void Update(uint32 diff);
         void OnPlayerLogout(ObjectGuid const& guid);
 
@@ -196,6 +197,7 @@ class LFTManager
 
         // Queue entries we created ourselves to fill a real player's group.
         std::set<ObjectGuid> m_fillBots;
+        std::map<ObjectGuid, time_t> m_forceBotFillCooldowns;
         uint32 m_botFillTimer;
 };
 

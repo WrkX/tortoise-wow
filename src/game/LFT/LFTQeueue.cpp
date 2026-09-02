@@ -710,6 +710,9 @@ bool LFTManager::AddPlayerToGroup(Group*& group, ObjectGuid const& leaderGuid, O
 
 bool LFTManager::CanQueuedPlayersGroup(QueuedPlayer const& seed, QueuedPlayer const& candidate) const
 {
+    if (seed.isHardcore != candidate.isHardcore)
+        return false;
+
     Player* seedPlayer = GetPlayer(seed.guid);
     Player* candidatePlayer = GetPlayer(candidate.guid);
     if (seedPlayer && candidatePlayer)

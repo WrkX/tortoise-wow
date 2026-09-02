@@ -2315,11 +2315,19 @@ GuildBank.NpcEntriesHorde = 80918
 #                 being hit. Healers are also the scarcer half of the shortage,
 #                 so a tighter bound here costs groups that would otherwise
 #                 have formed.
+#   ForceAfterSeconds
+#                 minimum time a real player must have waited before requesting
+#                 an immediate bot fill. The request still uses all normal
+#                 eligibility and human-priority rules.
+#   ForceCooldownSeconds
+#                 per-character cooldown between force requests.
 LFT.BotFill.Enable = 0
 LFT.BotFill.DelaySeconds = 60
 LFT.BotFill.LevelRangeBelow = 2
 LFT.BotFill.LevelRangeBelowHealer = 4
 LFT.BotFill.LevelRangeAbove = 6
+LFT.BotFill.ForceAfterSeconds = 30
+LFT.BotFill.ForceCooldownSeconds = 60
 
 
 # AutoScaler.Enable. Enable or disable instance auto-scaling. 0 = off, 1 = on.

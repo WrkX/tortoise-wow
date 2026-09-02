@@ -120,6 +120,69 @@ bool LFTManager::IsFillBot(ObjectGuid const& guid) const
     return m_fillBots.find(guid) != m_fillBots.end();
 }
 
+std::string LFTManager::RequestForceBotFill(Player* player)
+{
+    if (!player || !sWorld.getConfig(CONFIG_BOOL_LFT_BOTFILL_ENABLE))
+        return "disabled";
+
+    // This request is deliberately for a real player waiting in LFT. A bot or
+    // machine-driven character must not be able to spend the force-fill budget.
+    if (Script_IsMachineDriven(player))
+        return "not_eligible";
+
+    ObjectGuid const guid = player->GetObjectGuid();
+    QueueMap::const_iterator queued = m_queue.find(guid);
+    if (queued == m_queue.end())
+        return "not_queued";
+
+    // A premade is one queue entry per member with a shared queueLeaderGuid.
+    // Only its leader may request a fill, and only after rolecheck completion.
+    if (!queued->second.queueLeaderGuid.IsEmpty() && queued->second.queueLeaderGuid != guid)
+        return "not_leader";
+
+    for (RolecheckMap::const_iterator itr = m_rolechecks.begin(); itr != m_rolechecks.end(); ++itr)
+    {
+        if (std::find(itr->second.members.begin(), itr->second.members.end(), guid) != itr->second.members.end())
+            return "pending_rolecheck";
+    }
+
+    if (m_playerOffers.find(guid) != m_playerOffers.end())
+        return "pending_offer";
+
+    time_t const now = sWorld.GetGameTime();
+    time_t const lastRequest = m_forceBotFillCooldowns[guid];
+    uint32 const cooldown = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_COOLDOWN);
+    if (lastRequest && now >= lastRequest && uint32(now - lastRequest) < cooldown)
+        return "cooldown;" + std::to_string(cooldown - uint32(now - lastRequest));
+
+    uint32 const forceAfter = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_AFTER);
+    uint32 const queueAge = now >= queued->second.joinTime ? uint32(now - queued->second.joinTime) : 0;
+    if (queueAge < forceAfter)
+        return "too_soon;" + std::to_string(forceAfter - queueAge);
+
+    m_forceBotFillCooldowns[guid] = now;
+    size_t const botsBefore = m_fillBots.size();
+    bool const hadOffer = m_playerOffers.find(guid) != m_playerOffers.end();
+
+    // Reuse the normal fill path so role/level/faction/hardcore checks and
+    // human-priority behavior remain identical to timer-driven filling.
+    DropUnneededFillBots();
+    QueuedPlayer const waiter = queued->second;
+    for (std::string const& instance : waiter.instances)
+        FillInstanceWithBots(instance, waiter);
+
+    // This request runs on the world thread; do not wait for the next five
+    // second bot-fill tick before running the existing matcher.
+    TryMakeOffers();
+
+    if (!hadOffer && m_playerOffers.find(guid) != m_playerOffers.end())
+        return "offer";
+    else if (m_fillBots.size() > botsBefore)
+        return "filled";
+
+    return "unavailable";
+}
+
 void LFTManager::ForgetFillBot(ObjectGuid const& guid)
 {
     m_fillBots.erase(guid);
@@ -303,6 +366,9 @@ Player* LFTManager::TakeFromBotOnlyGroup(uint8 wanted, QueuedPlayer const& waite
         if (bot->GetTeam() != waiter.team)
             continue;
 
+        if (bot->IsHardcore() != waiter.isHardcore)
+            continue;
+
         uint32 const botLevel = bot->GetLevel();
         if (botLevel + below < waiter.level || waiter.level + above < botLevel)
             continue;
@@ -368,6 +434,9 @@ Player* LFTManager::TakeBotAndRespecFor(uint8 wanted, QueuedPlayer const& waiter
             continue;
 
         if (bot->GetTeam() != waiter.team)
+            continue;
+
+        if (bot->IsHardcore() != waiter.isHardcore)
             continue;
 
         uint32 const botLevel = bot->GetLevel();
@@ -483,6 +552,9 @@ void LFTManager::FillInstanceWithBots(std::string const& instance, QueuedPlayer 
             if (bot->GetTeam() != waiter.team)
                 continue;
 
+            if (bot->IsHardcore() != waiter.isHardcore)
+                continue;
+
             uint32 const botLevel = bot->GetLevel();
             uint32 const lowerBound = (wanted == LFT_ROLE_HEALER) ? belowHealer : below;
             if (botLevel + lowerBound < waiterLevel || waiterLevel + above < botLevel)
@@ -582,7 +654,7 @@ void LFTManager::AcceptOffersForFillBots()
             // button nobody was going to press, so the offer expired and the
             // whole cycle started over every couple of minutes. A real player
             // still decides for themselves.
-            if (!bot || !Script_IsAIControlled(bot))
+            if (!bot || !Script_IsMachineDriven(bot))
                 continue;
 
             // Hand the assigned role to the bot's AI before it accepts. Its
