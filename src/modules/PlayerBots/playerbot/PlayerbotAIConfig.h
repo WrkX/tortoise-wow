@@ -124,6 +124,7 @@ public:
     // and means unlimited, which is also the only behaviour this tree has.
     uint32 autoGearScoreLimit = 0;
     uint32 autoGearQualityLimit = 0;  // like autoGearScoreLimit: 0 = no cap (mod-dungeon-clear reads it for its test sidecar)
+    std::string companionAutonomyPolicy;
     bool autoSaveMana;
     bool forceRebuffOnReadyCheck;
     bool allowGuildBots;
