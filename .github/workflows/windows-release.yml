@@ -31,7 +31,7 @@ jobs:
         id: version
         run: |
           prefix='${{ env.RELEASE_VERSION }}'
-          latest=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
+          latest=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName -q '.[].tagName' \
             | grep -E "^${prefix//./\\.}\\.[0-9]+$" | sort -t. -k3 -n | tail -1 || true)
           if [ -z "$latest" ]; then
             tag="${prefix}.1"
