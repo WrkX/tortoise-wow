@@ -623,6 +623,22 @@ bool LFTManager::CompleteOffer(uint32 offerId)
         }
     }
 
+    // Keep mixed human/bot offers human-led. Without this, a solo real player
+    // is commonly placed under the bot tank and the bots follow that bot's
+    // autonomous movement instead of assisting the player's objectives.
+    if (leaderGuid.IsEmpty())
+    {
+        for (std::map<ObjectGuid, uint8>::const_iterator itr = offer.roles.begin(); itr != offer.roles.end(); ++itr)
+        {
+            Player* player = GetPlayer(itr->first);
+            if (player && !Script_IsMachineDriven(player))
+            {
+                leaderGuid = itr->first;
+                break;
+            }
+        }
+    }
+
     if (leaderGuid.IsEmpty())
     {
         for (std::map<ObjectGuid, uint8>::const_iterator itr = offer.roles.begin(); itr != offer.roles.end(); ++itr)

@@ -57,6 +57,7 @@ namespace
         uint8 size = 0;
         uint32 groupId = 0;
         uint32 requestId = 0;
+        bool force = false;
         uint32 timeout = 0;
         uint32 checkTimer = 0;
         std::vector<uint32> bots;
@@ -231,7 +232,7 @@ namespace
                 return left.player->GetObjectGuid() < right.player->GetObjectGuid();
             });
 
-            if (candidates.empty() && request.force)
+            if (candidates.empty() && request.force && !m_resumingActivation)
             {
                 uint32 activated = ScheduleOfflineBots(leader, request, needed);
                 if (activated)
@@ -339,6 +340,24 @@ namespace
                     continue;
                 ++added;
 
+                // Direct AddMember bypasses AcceptInvitationAction, so wire a
+                // free machine bot to the real leader here as well. This keeps
+                // its normal follow movement and clears stale activity after
+                // the role/group change, while leaving owned bots alone.
+                if (sRandomPlayerbotMgr.IsFreeBot(bot))
+                {
+                    if (PlayerbotAI* ai = GetBotAI(bot))
+                    {
+                        ai->SetMaster(leader);
+
+                        std::string const defaultMovementStrategy = ai->GetDefaultMovementStrategy();
+                        ai->ChangeStrategy("+" + defaultMovementStrategy, BotState::BOT_STATE_NON_COMBAT);
+                        ai->ResetStrategies();
+                        ai->ChangeStrategy("-lfg,-bg", BotState::BOT_STATE_NON_COMBAT);
+                        ai->Reset();
+                    }
+                }
+
                 if (!request.questId || bot->GetQuestStatus(request.questId) == QUEST_STATUS_INCOMPLETE)
                     continue;
                 if (nearby)
@@ -380,7 +399,7 @@ namespace
             }
 
             uint32 activated = 0;
-            if (added < needed && request.force)
+            if (added < needed && request.force && !m_resumingActivation)
                 activated = ScheduleOfflineBots(leader, request, needed - added);
 
             std::ostringstream result;
@@ -429,6 +448,25 @@ namespace
                 if (!leader || !leader->IsInWorld() || !leader->GetGroup() ||
                     leader->GetGroup()->GetId() != pending.groupId)
                 {
+                    itr = m_pendingShares.erase(itr);
+                    continue;
+                }
+
+                // A bot that left while travelling must not keep this request
+                // locked until the full timeout. The listing fill loop can
+                // then select a replacement on its next pass.
+                for (std::vector<ObjectGuid>::iterator botItr = pending.bots.begin();
+                     botItr != pending.bots.end();)
+                {
+                    Player* bot = sObjectMgr.GetPlayer(*botItr);
+                    if (!bot || bot->GetGroup() != leader->GetGroup())
+                        botItr = pending.bots.erase(botItr);
+                    else
+                        ++botItr;
+                }
+                if (pending.bots.empty())
+                {
+                    m_lastResult[itr->first] = "Quest group fill partial: regrouping bot left the group; replacement will be retried.";
                     itr = m_pendingShares.erase(itr);
                     continue;
                 }
@@ -525,7 +563,7 @@ namespace
 
             for (auto const& entry : sObjectMgr.GetAllPlayerCacheData())
             {
-                if (requested.size() >= requestCap || m_activatedOwners.size() >= globalCap)
+                if (requested.size() >= requestCap || CountInFlightActivations() >= globalCap)
                     break;
 
                 PlayerCacheData const* data = entry.second;
@@ -568,6 +606,7 @@ namespace
                     request.size,
                     leader->GetGroup() ? leader->GetGroup()->GetId() : 0,
                     request.requestId,
+                    request.force,
                     45 * IN_MILLISECONDS,
                     0,
                     requested
@@ -592,6 +631,21 @@ namespace
             auto itr = m_pendingActivations.find(leaderGuid);
             return itr != m_pendingActivations.end() &&
                 std::find(itr->second.bots.begin(), itr->second.bots.end(), botGuid) != itr->second.bots.end();
+        }
+
+        uint32 CountInFlightActivations() const
+        {
+            uint32 count = 0;
+            for (auto const& entry : m_activatedOwners)
+            {
+                Player* bot = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, entry.first));
+                Player* leader = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, entry.second));
+                if (bot && leader && bot->GetGroup() && bot->GetGroup() == leader->GetGroup())
+                    continue;
+
+                ++count;
+            }
+            return count;
         }
 
         void UpdatePendingActivations(uint32 diff)
@@ -656,7 +710,9 @@ namespace
                 itr = m_pendingActivations.erase(itr);
 
                 m_resumingActivation = true;
-                Start(leader, { pending.questId, pending.size, false, pending.requestId });
+                // Preserve the original widened candidate window, but do not
+                // force a second activation wave while consuming this one.
+                Start(leader, { pending.questId, pending.size, pending.force, pending.requestId });
                 m_resumingActivation = false;
 
                 uint32 const groupSize = leader->GetGroup() ? leader->GetGroup()->GetMembersCount() : 1;
