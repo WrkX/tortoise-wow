@@ -185,6 +185,10 @@ public:
     uint32 minRandomBotRandomizeTime, maxRandomBotRandomizeTime;
     uint32 minRandomBotChangeStrategyTime, maxRandomBotChangeStrategyTime;
     uint32 minRandomBotReviveTime, maxRandomBotReviveTime;
+    // Automatic quest-LFT assistants leave after the exact quest grace or a
+    // long idle period. Zero disables either departure policy.
+    uint32 questGroupFillQuestGraceSeconds, questGroupFillIdleSeconds;
+    uint32 questGroupFillOwnerOfflineSeconds;
     uint32 minRandomBotPvpTime, maxRandomBotPvpTime;
     uint32 randomBotsMaxLoginsPerInterval;
     uint32 randomBotsPerInterval;

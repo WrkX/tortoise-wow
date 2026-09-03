@@ -104,6 +104,17 @@ class LFTManager
             uint32 timer = 0;
         };
 
+        struct PendingDungeonRendezvous
+        {
+            uint32 groupId = 0;
+            ObjectGuid leaderGuid;
+            std::string instance;
+            std::vector<ObjectGuid> bots;
+            bool targetConfirmed = false;
+            uint32 delay = 0;
+            uint32 timeout = 0;
+        };
+
         typedef std::map<uint32, Listing> ListingsMap;
         typedef std::map<ObjectGuid, QueuedPlayer> QueueMap;
         typedef std::map<ObjectGuid, PendingRolecheck> RolecheckMap;
@@ -141,6 +152,8 @@ class LFTManager
         bool TryBuildOfferForInstance(std::string const& instance);
         bool CompleteOffer(uint32 offerId);
         bool AddPlayerToGroup(Group*& group, ObjectGuid const& leaderGuid, ObjectGuid const& memberGuid);
+        void ScheduleDungeonRendezvous(Offer const& offer, Group* group, ObjectGuid const& leaderGuid);
+        void UpdateDungeonRendezvous(uint32 diff);
 
         void EnsureListingsLoaded();
         void LoadListingsFromDB();
@@ -197,6 +210,7 @@ class LFTManager
         RolecheckMap m_rolechecks;
         OffersMap m_offers;
         std::map<ObjectGuid, uint32> m_playerOffers;
+        std::map<uint32, PendingDungeonRendezvous> m_pendingDungeonRendezvous;
         uint32 m_nextListingId;
         uint32 m_nextOfferId;
         uint64 m_nextQueueOrder;

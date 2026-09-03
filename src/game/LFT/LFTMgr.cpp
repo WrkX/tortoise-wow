@@ -101,6 +101,9 @@ bool LFTManager::HandleAddonMessage(Player* player, uint32 type, std::string con
 
 void LFTManager::Update(uint32 diff)
 {
+    // Rendezvous must run before DropUnneededFillBots() can release the queue
+    // markers that identify the bots created for a completed offer.
+    UpdateDungeonRendezvous(diff);
     UpdateBotFill(diff);
     UpdateQuestListingBotFill(diff);
 

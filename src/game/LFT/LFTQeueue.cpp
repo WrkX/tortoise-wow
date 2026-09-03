@@ -557,6 +557,24 @@ namespace
 
         return best;
     }
+
+    bool IsTargetDungeonMap(Player const* leader, std::string const& instance)
+    {
+        if (!leader || !leader->GetMap() || !leader->GetMap()->IsDungeon())
+            return false;
+
+        std::string const wanted = SquashInstanceName(instance);
+        std::string const actual = SquashInstanceName(leader->GetMap()->GetMapName());
+        if (wanted.size() < 5 || actual.size() < 5)
+            return false;
+
+        // Wings commonly use a shorter map name than the finder entry (or
+        // vice versa), so accept only a meaningful prefix in either direction.
+        return (wanted.size() >= actual.size() && wanted.compare(0, actual.size(), actual) == 0) ||
+               (actual.size() >= wanted.size() && actual.compare(0, wanted.size(), wanted) == 0);
+    }
+
+    uint32 constexpr MAX_PENDING_DUNGEON_RENDEZVOUS = 32;
 }
 
 // A group that formed without anybody real in it has nowhere to be but the
@@ -603,6 +621,237 @@ void LFTManager::TeleportBotGroupToInstance(Offer const& offer)
     }
 
     sLog.outBasic("LFT: bot group moved to the entrance of '%s' (%s)", offer.instance.c_str(), entrance->name.c_str());
+}
+
+void LFTManager::ScheduleDungeonRendezvous(Offer const& offer, Group* group, ObjectGuid const& leaderGuid)
+{
+    if (!group || leaderGuid.IsEmpty())
+        return;
+
+    Player* leader = GetPlayer(leaderGuid);
+    if (!leader || Script_IsMachineDriven(leader) || !group->IsLeader(leaderGuid))
+        return;
+
+    PendingDungeonRendezvous rendezvous;
+    rendezvous.groupId = group->GetId();
+    rendezvous.leaderGuid = leaderGuid;
+    rendezvous.instance = offer.instance;
+
+    GameTele const* entrance = FindInstanceEntrance(offer.instance);
+    if (!entrance)
+    {
+        sLog.outError("LFT: no game_tele entrance for rendezvous '%s' (group %u)", offer.instance.c_str(), rendezvous.groupId);
+        return;
+    }
+
+    rendezvous.targetConfirmed = IsTargetDungeonMap(leader, offer.instance) ||
+        (leader->GetMapId() == entrance->mapId && leader->GetInstanceId() == 0 &&
+         leader->GetDistance(entrance->x, entrance->y, entrance->z) <= 120.0f);
+
+    for (std::map<ObjectGuid, uint8>::const_iterator itr = offer.roles.begin(); itr != offer.roles.end(); ++itr)
+    {
+        if (!IsFillBot(itr->first))
+            continue;
+
+        Player* bot = GetPlayer(itr->first);
+        if (bot && Script_IsMachineDriven(bot))
+            rendezvous.bots.push_back(itr->first);
+    }
+
+    if (rendezvous.bots.empty())
+        return;
+
+    if (m_pendingDungeonRendezvous.size() >= MAX_PENDING_DUNGEON_RENDEZVOUS)
+    {
+        sLog.outBasic("LFT: dropping dungeon rendezvous for group %u; pending limit reached", rendezvous.groupId);
+        return;
+    }
+
+    rendezvous.delay = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_RENDEZVOUS_DELAY) * IN_MILLISECONDS;
+    rendezvous.timeout = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_RENDEZVOUS_TIMEOUT) * IN_MILLISECONDS;
+    if (rendezvous.timeout < rendezvous.delay)
+        rendezvous.timeout = rendezvous.delay;
+
+    m_pendingDungeonRendezvous[rendezvous.groupId] = rendezvous;
+    sLog.outBasic("LFT: scheduled dungeon rendezvous for group %u at '%s' (%u bot%s, delay %u sec, timeout %u sec)",
+        rendezvous.groupId, rendezvous.instance.c_str(), uint32(rendezvous.bots.size()),
+        rendezvous.bots.size() == 1 ? "" : "s", rendezvous.delay / IN_MILLISECONDS,
+        rendezvous.timeout / IN_MILLISECONDS);
+}
+
+void LFTManager::UpdateDungeonRendezvous(uint32 diff)
+{
+    for (std::map<uint32, PendingDungeonRendezvous>::iterator itr = m_pendingDungeonRendezvous.begin();
+         itr != m_pendingDungeonRendezvous.end();)
+    {
+        PendingDungeonRendezvous& rendezvous = itr->second;
+        uint32 const groupId = rendezvous.groupId;
+
+        Player* leader = GetPlayer(rendezvous.leaderGuid);
+        Group* group = leader ? leader->GetGroup() : nullptr;
+        if (!leader || !group || group->GetId() != groupId || !group->IsLeader(rendezvous.leaderGuid))
+        {
+            sLog.outBasic("LFT: cancelling dungeon rendezvous for group %u; leader or group changed", groupId);
+            itr = m_pendingDungeonRendezvous.erase(itr);
+            continue;
+        }
+
+        if (leader->InBattleGround() || leader->InBattleGroundQueue())
+        {
+            sLog.outBasic("LFT: cancelling dungeon rendezvous for group %u; leader entered battleground activity", groupId);
+            itr = m_pendingDungeonRendezvous.erase(itr);
+            continue;
+        }
+
+        for (std::vector<ObjectGuid>::iterator botItr = rendezvous.bots.begin(); botItr != rendezvous.bots.end();)
+        {
+            Player* bot = GetPlayer(*botItr);
+            if (!bot || bot->GetGroup() != group || !Script_IsMachineDriven(bot))
+                botItr = rendezvous.bots.erase(botItr);
+            else
+                ++botItr;
+        }
+
+        if (rendezvous.bots.empty())
+        {
+            itr = m_pendingDungeonRendezvous.erase(itr);
+            continue;
+        }
+
+        GameTele const* entrance = FindInstanceEntrance(rendezvous.instance);
+        if (!entrance)
+        {
+            sLog.outError("LFT: no game_tele entrance for rendezvous '%s' (group %u)", rendezvous.instance.c_str(), groupId);
+            itr = m_pendingDungeonRendezvous.erase(itr);
+            continue;
+        }
+
+        if (!rendezvous.targetConfirmed)
+        {
+            if (IsTargetDungeonMap(leader, rendezvous.instance))
+                rendezvous.targetConfirmed = true;
+            else if (leader->GetMapId() == entrance->mapId && leader->GetInstanceId() == 0 &&
+                     leader->GetDistance(entrance->x, entrance->y, entrance->z) <= 120.0f)
+                rendezvous.targetConfirmed = true;
+        }
+
+        // A short-lived combat, death or teleport should not make the group
+        // lose its automatic rendezvous. Keep the bounded timeout running,
+        // but pause the initial delay until the leader is safe again.
+        if (!leader->IsAlive() || leader->IsInCombat() || leader->IsBeingTeleported())
+        {
+            if (rendezvous.timeout <= diff)
+            {
+                sLog.outBasic("LFT: cancelling dungeon rendezvous for group %u; leader stayed unsafe until timeout", groupId);
+                itr = m_pendingDungeonRendezvous.erase(itr);
+            }
+            else
+            {
+                rendezvous.timeout -= diff;
+                ++itr;
+            }
+            continue;
+        }
+
+        bool const delayElapsed = rendezvous.delay <= diff;
+        if (delayElapsed)
+            rendezvous.delay = 0;
+        else
+            rendezvous.delay -= diff;
+
+        bool const timeoutElapsed = rendezvous.timeout <= diff;
+        if (timeoutElapsed)
+            rendezvous.timeout = 0;
+        else
+            rendezvous.timeout -= diff;
+
+        if (!delayElapsed)
+        {
+            ++itr;
+            continue;
+        }
+
+        bool const leaderInDungeon = rendezvous.targetConfirmed && IsTargetDungeonMap(leader, rendezvous.instance);
+        if (!leaderInDungeon && !timeoutElapsed)
+        {
+            ++itr;
+            continue;
+        }
+
+        uint32 mapId = 0;
+        uint32 instanceId = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float orientation = 0.0f;
+        if (leaderInDungeon)
+        {
+            mapId = leader->GetMapId();
+            instanceId = leader->GetInstanceId();
+            x = leader->GetPositionX();
+            y = leader->GetPositionY();
+            z = leader->GetPositionZ();
+            orientation = leader->GetOrientation();
+        }
+        else
+        {
+            mapId = entrance->mapId;
+            x = entrance->x;
+            y = entrance->y;
+            z = entrance->z;
+            orientation = entrance->o;
+        }
+
+        uint32 moved = 0;
+        std::vector<ObjectGuid> remainingBots;
+        remainingBots.reserve(rendezvous.bots.size());
+        for (ObjectGuid const& botGuid : rendezvous.bots)
+        {
+            Player* bot = GetPlayer(botGuid);
+            if (!bot || bot->GetGroup() != group || !Script_IsMachineDriven(bot))
+                continue;
+
+            if (!bot->IsAlive() || bot->IsInCombat() || bot->InBattleGround() || bot->InBattleGroundQueue() ||
+                bot->IsBeingTeleported())
+            {
+                remainingBots.push_back(botGuid);
+                continue;
+            }
+
+            if (leaderInDungeon)
+            {
+                if (bot->GetMapId() == mapId && bot->GetInstanceId() == instanceId &&
+                    bot->GetDistance(leader) <= 10.0f)
+                    continue;
+            }
+            else if (bot->GetMapId() == mapId && bot->GetInstanceId() == 0 &&
+                     bot->GetDistance(x, y, z) <= 10.0f)
+                continue;
+
+            if (bot->GetMapId() == mapId && bot->GetInstanceId() == instanceId)
+                bot->NearTeleportTo(x, y, z, orientation);
+            else
+                bot->TeleportTo(mapId, x, y, z, orientation);
+            ++moved;
+        }
+
+        rendezvous.bots.swap(remainingBots);
+
+        if (!rendezvous.bots.empty() && !timeoutElapsed)
+        {
+            if (moved)
+                sLog.outBasic("LFT: dungeon rendezvous moved %u bot%s for group %u; waiting for %u unsafe bot%s",
+                    moved, moved == 1 ? "" : "s", groupId, uint32(rendezvous.bots.size()),
+                    rendezvous.bots.size() == 1 ? "" : "s");
+            ++itr;
+            continue;
+        }
+
+        sLog.outBasic("LFT: dungeon rendezvous moved %u bot%s for group %u%s", moved,
+            moved == 1 ? "" : "s", groupId,
+            leaderInDungeon ? " to the leader in the dungeon" : " to the dungeon entrance");
+        itr = m_pendingDungeonRendezvous.erase(itr);
+    }
 }
 
 bool LFTManager::CompleteOffer(uint32 offerId)
@@ -673,6 +922,7 @@ bool LFTManager::CompleteOffer(uint32 offerId)
     }
 
     TeleportBotGroupToInstance(offer);
+    ScheduleDungeonRendezvous(offer, group, leaderGuid);
 
     m_offers.erase(offerId);
     return true;

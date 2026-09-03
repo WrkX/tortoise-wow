@@ -16,6 +16,7 @@
 #include "playerbot/PlayerbotAI.h"
 #include "playerbot/PlayerbotAIConfig.h"
 #include "playerbot/RandomPlayerbotMgr.h"
+#include "playerbot/ServerFacade.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -62,6 +63,50 @@ namespace
         uint32 checkTimer = 0;
         std::vector<uint32> bots;
     };
+
+    struct AttachedAssistant
+    {
+        uint32 leaderGuid = 0;
+        uint8 assignedRole = 0;
+        uint8 previousForcedRole = 0;
+        uint32 questId = 0;
+        uint32 questGraceTimer = 0;
+        uint32 idleTimer = 0;
+        uint32 ownerOfflineTimer = 0;
+    };
+
+    uint32 SecondsToMilliseconds(uint32 seconds)
+    {
+        uint64 const milliseconds = uint64(seconds) * IN_MILLISECONDS;
+        return milliseconds > 0xFFFFFFFFULL ? 0xFFFFFFFFU : uint32(milliseconds);
+    }
+
+    struct OfflineCandidate
+    {
+        PlayerCacheData const* data = nullptr;
+        uint8 roles = 0;
+        int score = 0;
+    };
+
+    uint8 CachedAllowedRoles(uint32 playerClass)
+    {
+        switch (playerClass)
+        {
+            case CLASS_DRUID:   return ROLE_TANK | ROLE_HEALER | ROLE_DPS;
+            case CLASS_HUNTER:  return ROLE_DPS;
+            case CLASS_MAGE:    return ROLE_DPS;
+            case CLASS_PALADIN: return ROLE_TANK | ROLE_HEALER | ROLE_DPS;
+            case CLASS_PRIEST:  return ROLE_HEALER | ROLE_DPS;
+            case CLASS_ROGUE:   return ROLE_DPS;
+            case CLASS_SHAMAN:  return ROLE_HEALER | ROLE_DPS;
+            case CLASS_WARLOCK: return ROLE_DPS;
+            case CLASS_WARRIOR: return ROLE_TANK | ROLE_DPS;
+#ifdef MANGOSBOT_TWO
+            case CLASS_DEATH_KNIGHT: return ROLE_TANK | ROLE_DPS;
+#endif
+            default:            return 0;
+        }
+    }
 
     uint32 LevelDifference(Player const* first, Player const* second)
     {
@@ -332,6 +377,8 @@ namespace
                 Player* bot = candidate.player;
 
                 bool const nearby = RegroupBot(leader, bot);
+                PlayerbotAI* botAI = GetBotAI(bot);
+                uint8 const previousForcedRole = botAI ? botAI->GetForcedRole() : 0;
 
                 if (candidate.assignedRole)
                     Script_SetForcedRole(bot, candidate.assignedRole);
@@ -356,6 +403,13 @@ namespace
                         ai->ChangeStrategy("-lfg,-bg", BotState::BOT_STATE_NON_COMBAT);
                         ai->Reset();
                     }
+
+                    m_attachedAssistants[bot->GetGUIDLow()] = {
+                        leader->GetGUIDLow(), candidate.assignedRole, previousForcedRole,
+                        request.questId,
+                        SecondsToMilliseconds(sPlayerbotAIConfig.questGroupFillQuestGraceSeconds),
+                        SecondsToMilliseconds(sPlayerbotAIConfig.questGroupFillIdleSeconds),
+                        SecondsToMilliseconds(sPlayerbotAIConfig.questGroupFillOwnerOfflineSeconds) };
                 }
 
                 if (!request.questId || bot->GetQuestStatus(request.questId) == QUEST_STATUS_INCOMPLETE)
@@ -418,12 +472,15 @@ namespace
                 result << " " << pendingTravel << " bot" << (pendingTravel == 1 ? " is" : "s are") << " regrouping; sharing will be possible when nearby.";
             if (activated)
                 result << " Activating " << activated << " compatible offline bot" << (activated == 1 ? "" : "s") << " for the remaining slots.";
+            if (added)
+                LogBasic("QuestGroupFill: attached " + std::to_string(added) + " assistant(s) to " + leader->GetName());
             return Remember(leader, result.str());
         }
 
         void Update(uint32 diff)
         {
             UpdatePendingActivations(diff);
+            CleanupAttachedAssistants(diff);
 
             for (auto itr = m_pendingShares.begin(); itr != m_pendingShares.end();)
             {
@@ -467,6 +524,7 @@ namespace
                 if (pending.bots.empty())
                 {
                     m_lastResult[itr->first] = "Quest group fill partial: regrouping bot left the group; replacement will be retried.";
+                    LogBasic("QuestGroupFill: pending assistant left before quest share; replacement will be retried");
                     itr = m_pendingShares.erase(itr);
                     continue;
                 }
@@ -518,8 +576,31 @@ namespace
         {
             if (!leader)
                 return "Quest group fill status unavailable: player not found.";
-            auto itr = m_lastResult.find(leader->GetGUIDLow());
-            return itr == m_lastResult.end() ? "Quest group fill is idle." : itr->second;
+
+            uint32 const leaderGuid = leader->GetGUIDLow();
+            auto itr = m_lastResult.find(leaderGuid);
+            std::string result = itr == m_lastResult.end() ? "Quest group fill is idle." : itr->second;
+
+            uint32 attachedAssistants = 0;
+            for (auto const& entry : m_attachedAssistants)
+                if (entry.second.leaderGuid == leaderGuid)
+                    ++attachedAssistants;
+
+            uint32 pendingShareBots = 0;
+            auto share = m_pendingShares.find(leaderGuid);
+            if (share != m_pendingShares.end())
+                pendingShareBots = share->second.bots.size();
+
+            uint32 pendingActivationBots = 0;
+            auto activation = m_pendingActivations.find(leaderGuid);
+            if (activation != m_pendingActivations.end())
+                pendingActivationBots = activation->second.bots.size();
+
+            std::ostringstream state;
+            state << " [state attached_assistants=" << attachedAssistants
+                  << " pending_quest_share_bots=" << pendingShareBots
+                  << " pending_offline_activations=" << pendingActivationBots << "]";
+            return result + state.str();
         }
 
         std::string Cancel(Player* leader, uint32 requestId = 0) override
@@ -561,11 +642,30 @@ namespace
             std::list<uint32> const activeList = sRandomPlayerbotMgr.GetActiveRotationBots();
             std::set<uint32> const activeRotation(activeList.begin(), activeList.end());
 
+            bool hasTank = false;
+            bool hasHealer = false;
+            if (Group* group = leader->GetGroup())
+            {
+                for (Group::MemberSlot const& slot : group->GetMemberSlots())
+                {
+                    uint8 const roles = Script_GetAllowedRoles(sObjectMgr.GetPlayer(slot.guid));
+                    hasTank = hasTank || (roles & ROLE_TANK);
+                    hasHealer = hasHealer || (roles & ROLE_HEALER);
+                }
+            }
+            else
+            {
+                uint8 const roles = Script_GetAllowedRoles(leader);
+                hasTank = (roles & ROLE_TANK) != 0;
+                hasHealer = (roles & ROLE_HEALER) != 0;
+            }
+
+            bool const needTank = request.size >= 4 && !hasTank;
+            bool const needHealer = request.size >= 3 && !hasHealer;
+            std::vector<OfflineCandidate> candidates;
+
             for (auto const& entry : sObjectMgr.GetAllPlayerCacheData())
             {
-                if (requested.size() >= requestCap || CountInFlightActivations() >= globalCap)
-                    break;
-
                 PlayerCacheData const* data = entry.second;
                 if (!data || !sPlayerbotAIConfig.IsInRandomAccountList(data->uiAccount))
                     continue;
@@ -588,6 +688,33 @@ namespace
                     sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, lowGuid), false))
                     continue;
 
+                uint8 const roles = CachedAllowedRoles(data->uiClass);
+                int score = 0;
+                if (needTank && (roles & ROLE_TANK))
+                    score += 100;
+                if (needHealer && (roles & ROLE_HEALER))
+                    score += 80;
+                if (roles & ROLE_DPS)
+                    score += 10;
+                score -= int(levelDiff);
+                candidates.push_back({ data, roles, score });
+            }
+
+            std::sort(candidates.begin(), candidates.end(), [](OfflineCandidate const& left, OfflineCandidate const& right)
+            {
+                if (left.score != right.score)
+                    return left.score > right.score;
+                return left.data->uiGuid < right.data->uiGuid;
+            });
+
+            for (OfflineCandidate const& candidate : candidates)
+            {
+                if (requested.size() >= requestCap || CountInFlightActivations() >= globalCap)
+                    break;
+
+                PlayerCacheData const* data = candidate.data;
+                uint32 const lowGuid = data->uiGuid;
+
                 sRandomPlayerbotMgr.SetExternallyManaged(lowGuid, true);
                 if (!sRandomPlayerbotMgr.AddRandomBot(lowGuid))
                 {
@@ -598,6 +725,9 @@ namespace
                 m_activatedOwners[lowGuid] = leader->GetGUIDLow();
                 requested.push_back(lowGuid);
             }
+
+            if (!requested.empty())
+                LogBasic("QuestGroupFill: activating " + std::to_string(requested.size()) + " offline assistant(s) for " + leader->GetName());
 
             if (!requested.empty())
             {
@@ -639,8 +769,8 @@ namespace
             for (auto const& entry : m_activatedOwners)
             {
                 Player* bot = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, entry.first));
-                Player* leader = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, entry.second));
-                if (bot && leader && bot->GetGroup() && bot->GetGroup() == leader->GetGroup())
+                if (bot && bot->GetGroup() &&
+                    bot->GetGroup()->IsMember(ObjectGuid(HIGHGUID_PLAYER, entry.second)))
                     continue;
 
                 ++count;
@@ -748,8 +878,8 @@ namespace
                 Player* bot = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, botGuid));
                 Player* leader = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, leaderGuid));
 
-                bool const groupedWithOwner = bot && leader && bot->GetGroup() &&
-                    bot->GetGroup() == leader->GetGroup();
+                bool const groupedWithOwner = bot && bot->GetGroup() &&
+                    bot->GetGroup()->IsMember(ObjectGuid(HIGHGUID_PLAYER, leaderGuid));
                 if (groupedWithOwner || IsActivationPending(leaderGuid, botGuid))
                 {
                     ++itr;
@@ -784,8 +914,150 @@ namespace
                     ++itr;
                     continue;
                 }
+                LogBasic("QuestGroupFill: released offline assistant " + std::to_string(botGuid) + " after activation cleanup");
                 itr = m_activatedOwners.erase(itr);
             }
+        }
+
+        void CleanupAttachedAssistants(uint32 diff)
+        {
+            for (auto itr = m_attachedAssistants.begin(); itr != m_attachedAssistants.end();)
+            {
+                uint32 const botGuid = itr->first;
+                AttachedAssistant& attached = itr->second;
+                Player* bot = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, botGuid));
+                Player* leader = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, attached.leaderGuid));
+
+                if (bot && bot->GetGroup() &&
+                    bot->GetGroup()->IsMember(ObjectGuid(HIGHGUID_PLAYER, attached.leaderGuid)))
+                {
+                    if (PlayerbotAI* ai = GetBotAI(bot))
+                    {
+                        ai->RevalidateMasterPointer();
+                        Player* master = ai->GetMaster();
+                        if (master && master != leader && ai->HasRealPlayerMaster())
+                        {
+                            // A real player took ownership after the listing
+                            // fill. Drop only our temporary role override.
+                            if (attached.assignedRole && ai->GetForcedRole() == attached.assignedRole)
+                                Script_SetForcedRole(bot, attached.previousForcedRole);
+                            itr = m_attachedAssistants.erase(itr);
+                            continue;
+                        }
+                    }
+
+                    bool const ownerOnline = leader && leader->IsInWorld();
+                    uint32 const ownerOfflineDuration = SecondsToMilliseconds(sPlayerbotAIConfig.questGroupFillOwnerOfflineSeconds);
+                    if (!ownerOnline)
+                    {
+                        if (ownerOfflineDuration && attached.ownerOfflineTimer > diff)
+                            attached.ownerOfflineTimer -= diff;
+                        else if (ownerOfflineDuration)
+                            attached.ownerOfflineTimer = 0;
+
+                        bool const unsafeOwnerOfflineRemoval = !ownerOfflineDuration ||
+                            attached.ownerOfflineTimer || !bot->IsAlive() || !bot->IsInWorld() ||
+                            bot->IsInCombat() || bot->InBattleGround() ||
+                            bot->InBattleGroundQueue() || bot->IsBeingTeleported();
+                        if (!unsafeOwnerOfflineRemoval)
+                        {
+                            LogBasic("QuestGroupFill: detaching assistant " + std::to_string(botGuid) +
+                                " after owner offline timeout");
+                            bot->RemoveFromGroup();
+                        }
+                        ++itr;
+                        continue;
+                    }
+                    attached.ownerOfflineTimer = ownerOfflineDuration;
+
+                    bool const unsafe = !bot->IsAlive() || !leader->IsAlive() ||
+                        bot->IsInCombat() || leader->IsInCombat() ||
+                        bot->InBattleGround() || leader->InBattleGround() ||
+                        bot->InBattleGroundQueue() || leader->InBattleGroundQueue() ||
+                        bot->IsBeingTeleported() || leader->IsBeingTeleported();
+
+                    uint32 const idleDuration = SecondsToMilliseconds(sPlayerbotAIConfig.questGroupFillIdleSeconds);
+                    if (idleDuration)
+                    {
+                        if (bot->IsInCombat() || leader->IsInCombat() ||
+                            sServerFacade.isMoving(bot) || sServerFacade.isMoving(leader))
+                            attached.idleTimer = idleDuration;
+                        else if (attached.idleTimer > diff)
+                            attached.idleTimer -= diff;
+                        else
+                            attached.idleTimer = 0;
+                    }
+
+                    bool questExpired = false;
+                    uint32 const questGrace = SecondsToMilliseconds(sPlayerbotAIConfig.questGroupFillQuestGraceSeconds);
+                    if (attached.questId && questGrace)
+                    {
+                        bool const leaderQuestIncomplete = leader->GetQuestStatus(attached.questId) == QUEST_STATUS_INCOMPLETE;
+                        bool const assistantQuestIncomplete = bot->GetQuestStatus(attached.questId) == QUEST_STATUS_INCOMPLETE;
+                        if (leaderQuestIncomplete || assistantQuestIncomplete)
+                            attached.questGraceTimer = questGrace;
+                        else if (attached.questGraceTimer > diff)
+                            attached.questGraceTimer -= diff;
+                        else
+                            attached.questGraceTimer = 0;
+
+                        questExpired = attached.questGraceTimer == 0;
+                    }
+
+                    bool const idleExpired = idleDuration && attached.idleTimer == 0;
+                    if (unsafe || (!questExpired && !idleExpired))
+                    {
+                        ++itr;
+                        continue;
+                    }
+
+                    LogBasic("QuestGroupFill: detaching assistant " + std::to_string(botGuid) +
+                        (questExpired ? " after quest grace" : " after idle timeout"));
+                    bot->RemoveFromGroup();
+                    ++itr;
+                    continue;
+                }
+
+                if (bot)
+                {
+                    if (PlayerbotAI* ai = GetBotAI(bot))
+                    {
+                        ai->RevalidateMasterPointer();
+                        Player* master = ai->GetMaster();
+                        bool const stillOwned = !master || (leader && master == leader);
+                        if (stillOwned)
+                        {
+                            if (master == leader)
+                                ai->SetMaster(nullptr);
+                            if (attached.assignedRole && ai->GetForcedRole() == attached.assignedRole)
+                                Script_SetForcedRole(bot, attached.previousForcedRole);
+                            ai->ResetStrategies();
+                        }
+                        else
+                        {
+                            // A real player took ownership after the listing
+                            // fill. Preserve their master and strategies, but
+                            // do not leak our temporary role override.
+                            if (attached.assignedRole && ai->GetForcedRole() == attached.assignedRole)
+                                Script_SetForcedRole(bot, attached.previousForcedRole);
+                            itr = m_attachedAssistants.erase(itr);
+                            continue;
+                        }
+                    }
+                }
+
+                LogBasic("QuestGroupFill: released assistant " + std::to_string(botGuid) + " after leaving owner group");
+                itr = m_attachedAssistants.erase(itr);
+            }
+        }
+
+        void LogBasic(std::string const& message)
+        {
+            time_t const now = sWorld.GetGameTime();
+            if (now < m_nextLog)
+                return;
+            sLog.outBasic("%s", message.c_str());
+            m_nextLog = now + 5;
         }
 
         std::string Remember(Player* leader, std::string result)
@@ -798,7 +1070,9 @@ namespace
         std::map<uint32, PendingShare> m_pendingShares;
         std::map<uint32, PendingActivation> m_pendingActivations;
         std::map<uint32, uint32> m_activatedOwners;
+        std::map<uint32, AttachedAssistant> m_attachedAssistants;
         bool m_resumingActivation = false;
+        time_t m_nextLog = 0;
     };
 
     QuestGroupFillService& GetQuestGroupFillService()
