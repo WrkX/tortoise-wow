@@ -447,6 +447,9 @@ enum eConfigUInt32Values
     CONFIG_UINT32_LFT_BOTFILL_LEVEL_ABOVE,
     CONFIG_UINT32_LFT_BOTFILL_FORCE_AFTER,
     CONFIG_UINT32_LFT_BOTFILL_FORCE_COOLDOWN,
+    CONFIG_UINT32_LFT_BOTFILL_QUEST_DELAY,
+    CONFIG_UINT32_LFT_BOTFILL_QUEST_FORCE_AFTER,
+    CONFIG_UINT32_LFT_BOTFILL_QUEST_DEFAULT_SIZE,
     CONFIG_UINT32_VALUE_COUNT
 };
 
@@ -755,6 +758,7 @@ enum eConfigBoolValues
     // Dungeon finder: fill a waiting player's group with random bots.
     // See LFT/LFTBotFill.cpp
     CONFIG_BOOL_LFT_BOTFILL_ENABLE,
+    CONFIG_BOOL_LFT_BOTFILL_QUEST_LISTINGS,
     CONFIG_BOOL_AUTOSCALER_ENABLE,
     // Remove navmesh tiles again at runtime. Off by default, see
     // MMapManager::unloadMap.

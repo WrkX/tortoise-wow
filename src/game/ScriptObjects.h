@@ -146,6 +146,8 @@ enum PlayerHook
     PLAYERHOOK_HAS_AI_FOLLOWERS,
     PLAYERHOOK_GET_ALLOWED_ROLES,
     PLAYERHOOK_SET_FORCED_ROLE,
+    PLAYERHOOK_FILL_QUEST_LISTING,
+    PLAYERHOOK_CANCEL_QUEST_LISTING_FILL,
     PLAYERHOOK_ON_CHAT_COMMAND,
     PLAYERHOOK_CAN_USE_GROUP_CHAT,
     PLAYERHOOK_END
@@ -224,6 +226,12 @@ class PlayerScript : public ScriptObject
 
         // Pin this character to one role for the coming run. Mask as above.
         virtual void SetForcedRole(Player* /*player*/, uint8 /*role*/) {}
+
+        // Let an optional population module supply assistants for an ordinary
+        // Quests & Zones LFT listing. questId may be zero when the free-text
+        // listing cannot be mapped unambiguously to one active quest.
+        virtual bool FillQuestListing(Player* /*leader*/, uint32 /*listingId*/, uint32 /*questId*/, uint8 /*size*/, bool /*force*/) { return false; }
+        virtual void CancelQuestListingFill(Player* /*leader*/, uint32 /*listingId*/) {}
 
         // A player typed something that a module may want to act on. Unlike
         // OnBeforeSendChatMessage this carries the whisper target and cannot alter

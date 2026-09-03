@@ -65,6 +65,9 @@ class LFTManager
             std::array<uint8, 3> limit = {{0, 0, 0}};
             std::array<uint8, 3> numConfirmed = {{0, 0, 0}};
             std::array<std::vector<ListingSignup>, 3> signups;
+            time_t createdAt = 0;
+            time_t nextBotFill = 0;
+            bool botFillStarted = false;
         };
 
         struct QueuedPlayer
@@ -170,6 +173,7 @@ class LFTManager
 
         // Bot fill - see LFTBotFill.cpp
         void UpdateBotFill(uint32 diff);
+        void UpdateQuestListingBotFill(uint32 diff);
         void DropUnneededFillBots();
         void FillInstanceWithBots(std::string const& instance, QueuedPlayer const& waiter);
         void SeedBotOnlyQueue();
@@ -184,6 +188,9 @@ class LFTManager
         void ForgetFillBot(ObjectGuid const& guid);
         bool IsFillBot(ObjectGuid const& guid) const;
         bool RealPlayerWaitsFor(std::string const& instance, time_t& oldestJoin) const;
+        uint32 FindListingQuest(Player* leader, Listing const& listing) const;
+        uint8 GetQuestListingSize(Player* leader, Listing const& listing, uint32 questId) const;
+        bool SyncQuestListingMembers(Listing& listing, Player* leader);
 
         ListingsMap m_listings;
         QueueMap m_queue;
@@ -199,6 +206,7 @@ class LFTManager
         std::set<ObjectGuid> m_fillBots;
         std::map<ObjectGuid, time_t> m_forceBotFillCooldowns;
         uint32 m_botFillTimer;
+        uint32 m_questListingFillTimer;
 };
 
 extern LFTManager sLFTMgr;

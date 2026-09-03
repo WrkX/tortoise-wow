@@ -3,6 +3,7 @@
 #include "Chat.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "World.h"
 
 LFTManager sLFTMgr;
@@ -34,7 +35,7 @@ namespace
     }
 }
 
-LFTManager::LFTManager() : m_nextListingId(1), m_nextOfferId(1), m_nextQueueOrder(1), m_listingsLoaded(false), m_botFillTimer(0)
+LFTManager::LFTManager() : m_nextListingId(1), m_nextOfferId(1), m_nextQueueOrder(1), m_listingsLoaded(false), m_botFillTimer(0), m_questListingFillTimer(0)
 {
 }
 
@@ -101,6 +102,7 @@ bool LFTManager::HandleAddonMessage(Player* player, uint32 type, std::string con
 void LFTManager::Update(uint32 diff)
 {
     UpdateBotFill(diff);
+    UpdateQuestListingBotFill(diff);
 
     for (QueueMap::iterator itr = m_queue.begin(); itr != m_queue.end();)
     {
@@ -146,11 +148,15 @@ void LFTManager::OnPlayerLogout(ObjectGuid const& guid)
     CleanupPlayer(guid);
     m_forceBotFillCooldowns.erase(guid);
 
+    Player* logoutPlayer = sObjectMgr.GetPlayer(guid, false);
+
     bool changedListings = false;
     for (ListingsMap::iterator itr = m_listings.begin(); itr != m_listings.end();)
     {
         if (itr->second.creatorGuid == guid)
         {
+            if (logoutPlayer)
+                Script_CancelQuestListingFill(logoutPlayer, itr->second.id);
             changedListings = true;
             DeleteListingFromDB(itr->second.id);
             itr = m_listings.erase(itr);

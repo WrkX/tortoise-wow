@@ -1633,6 +1633,10 @@ void World::LoadConfigSettingsFromFile(bool reload)
     setConfig(CONFIG_UINT32_LFT_BOTFILL_LEVEL_ABOVE, "LFT.BotFill.LevelRangeAbove", 6);
     setConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_AFTER, "LFT.BotFill.ForceAfterSeconds", 30);
     setConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_COOLDOWN, "LFT.BotFill.ForceCooldownSeconds", 60);
+    setConfig(CONFIG_BOOL_LFT_BOTFILL_QUEST_LISTINGS, "LFT.BotFill.QuestListings", true);
+    setConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_DELAY, "LFT.BotFill.QuestDelaySeconds", 60);
+    setConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_FORCE_AFTER, "LFT.BotFill.QuestForceAfterSeconds", 180);
+    setConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_DEFAULT_SIZE, "LFT.BotFill.QuestDefaultSize", 5);
 
     setConfig(CONFIG_UINT32_PERFORMANCE_REPORT_INTERVAL, "Perf.ReportInterval", 600);
     setConfig(CONFIG_UINT32_MAX_GOLD_TRANSFERRED, "Transfer.MaxGold", 300000);

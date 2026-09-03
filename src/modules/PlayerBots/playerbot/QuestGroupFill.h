@@ -20,6 +20,7 @@ namespace QuestGroupFill
         std::uint32_t questId = 0;
         std::uint8_t size = 5;
         bool force = false;
+        std::uint32_t requestId = 0; // zero for a manual command; listing id for automatic LFT fills
     };
 
     class Service
@@ -31,7 +32,7 @@ namespace QuestGroupFill
         // selection, regroup/share retries, and status.
         virtual std::string Start(Player* leader, Request const& request) = 0;
         virtual std::string Status(Player* leader) const = 0;
-        virtual std::string Cancel(Player* leader) = 0;
+        virtual std::string Cancel(Player* leader, std::uint32_t requestId = 0) = 0;
     };
 
     inline Service*& RegisteredService()

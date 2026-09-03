@@ -43,20 +43,22 @@ namespace
 
     struct PendingShare
     {
-        uint32 questId;
-        uint32 groupId;
-        uint32 timeout;
-        uint32 checkTimer;
+        uint32 questId = 0;
+        uint32 groupId = 0;
+        uint32 requestId = 0;
+        uint32 timeout = 0;
+        uint32 checkTimer = 0;
         std::vector<ObjectGuid> bots;
     };
 
     struct PendingActivation
     {
-        uint32 questId;
-        uint8 size;
-        uint32 groupId;
-        uint32 timeout;
-        uint32 checkTimer;
+        uint32 questId = 0;
+        uint8 size = 0;
+        uint32 groupId = 0;
+        uint32 requestId = 0;
+        uint32 timeout = 0;
+        uint32 checkTimer = 0;
         std::vector<uint32> bots;
     };
 
@@ -125,8 +127,22 @@ namespace
             // player explicitly started a different fill.
             if (!m_resumingActivation)
             {
-                m_pendingShares.erase(leader->GetGUIDLow());
-                CancelPendingActivation(leader->GetGUIDLow());
+                if (request.requestId)
+                {
+                    auto share = m_pendingShares.find(leader->GetGUIDLow());
+                    auto activation = m_pendingActivations.find(leader->GetGUIDLow());
+                    bool const sameShare = share != m_pendingShares.end() && share->second.requestId == request.requestId;
+                    bool const sameActivation = activation != m_pendingActivations.end() && activation->second.requestId == request.requestId;
+                    if (sameShare || sameActivation)
+                        return Remember(leader, "Quest listing fill is already regrouping or activating assistants.");
+                    if (share != m_pendingShares.end() || activation != m_pendingActivations.end())
+                        return Remember(leader, "Quest listing fill is waiting for another group-fill request to finish.");
+                }
+                else
+                {
+                    m_pendingShares.erase(leader->GetGUIDLow());
+                    CancelPendingActivation(leader->GetGUIDLow());
+                }
             }
 
             if (!leader->IsAlive() || leader->IsInCombat() || leader->InBattleGround() || leader->InBattleGroundQueue())
@@ -135,15 +151,17 @@ namespace
             if (request.size < 2 || request.size > 5)
                 return "Quest group fill failed: group size must be between 2 and 5.";
 
-            Quest const* quest = sObjectMgr.GetQuestTemplate(request.questId);
-            if (!quest)
-                return "Quest group fill failed: quest " + std::to_string(request.questId) + " does not exist.";
+            if (request.questId)
+            {
+                if (!sObjectMgr.GetQuestTemplate(request.questId))
+                    return "Quest group fill failed: quest " + std::to_string(request.questId) + " does not exist.";
 
-            QuestStatus questStatus = leader->GetQuestStatus(request.questId);
-            if (questStatus == QUEST_STATUS_COMPLETE)
-                return Remember(leader, "Quest group fill complete: you already completed quest " + std::to_string(request.questId) + ".");
-            if (questStatus != QUEST_STATUS_INCOMPLETE)
-                return Remember(leader, "Quest group fill failed: you do not have quest " + std::to_string(request.questId) + " active.");
+                QuestStatus questStatus = leader->GetQuestStatus(request.questId);
+                if (questStatus == QUEST_STATUS_COMPLETE)
+                    return Remember(leader, "Quest group fill complete: you already completed quest " + std::to_string(request.questId) + ".");
+                if (questStatus != QUEST_STATUS_INCOMPLETE)
+                    return Remember(leader, "Quest group fill failed: you do not have quest " + std::to_string(request.questId) + " active.");
+            }
 
             Group* group = leader->GetGroup();
             if (group && group->isRaidGroup())
@@ -157,8 +175,10 @@ namespace
             uint32 needed = request.size - currentSize;
             if (needed == 0)
             {
-                ShareQuest(leader, request.questId);
-                return Remember(leader, "Quest group fill complete: the group already has " + std::to_string(currentSize) + " members; quest sharing was retried.");
+                if (request.questId)
+                    ShareQuest(leader, request.questId);
+                return Remember(leader, "Quest group fill complete: the group already has " + std::to_string(currentSize) + " members" +
+                    (request.questId ? "; quest sharing was retried." : "."));
             }
 
             std::vector<Candidate> candidates;
@@ -190,7 +210,7 @@ namespace
 
                 uint8 roles = Script_GetAllowedRoles(bot);
                 int score = 0;
-                if (bot->GetQuestStatus(request.questId) == QUEST_STATUS_INCOMPLETE)
+                if (request.questId && bot->GetQuestStatus(request.questId) == QUEST_STATUS_INCOMPLETE)
                     score += 100; // Quest carriers need no share/accept round trip.
                 if (bot->GetMapId() == leader->GetMapId() && bot->GetInstanceId() == leader->GetInstanceId())
                     score += 20;
@@ -319,7 +339,7 @@ namespace
                     continue;
                 ++added;
 
-                if (bot->GetQuestStatus(request.questId) == QUEST_STATUS_INCOMPLETE)
+                if (!request.questId || bot->GetQuestStatus(request.questId) == QUEST_STATUS_INCOMPLETE)
                     continue;
                 if (nearby)
                     ++shared;
@@ -344,14 +364,15 @@ namespace
             // Reuse the normal server quest-share path. It validates distance,
             // quest status, quest log capacity, and quest-divider state. We do
             // not grant or inject a quest directly into a bot's quest log.
-            if (shared)
+            if (request.questId && shared)
                 ShareQuest(leader, request.questId);
 
-            if (!pendingBots.empty())
+            if (request.questId && !pendingBots.empty())
             {
                 PendingShare& pending = m_pendingShares[leader->GetGUIDLow()];
-                if (pending.questId != request.questId || pending.groupId != group->GetId())
-                    pending = { request.questId, group->GetId(), 30 * IN_MILLISECONDS, 0, {} };
+                if (pending.questId != request.questId || pending.groupId != group->GetId() ||
+                    pending.requestId != request.requestId)
+                    pending = { request.questId, group->GetId(), request.requestId, 30 * IN_MILLISECONDS, 0, {} };
                 pending.timeout = 30 * IN_MILLISECONDS;
                 for (ObjectGuid const& guid : pendingBots)
                     if (std::find(pending.bots.begin(), pending.bots.end(), guid) == pending.bots.end())
@@ -363,12 +384,15 @@ namespace
                 activated = ScheduleOfflineBots(leader, request, needed - added);
 
             std::ostringstream result;
+            std::string const subject = request.questId
+                ? " for quest " + std::to_string(request.questId)
+                : " for the Quests & Zones listing";
             if (added == needed && pendingTravel == 0)
                 result << "Quest group fill complete: added " << added << " bot" << (added == 1 ? "" : "s")
-                       << " for quest " << request.questId << ".";
+                       << subject << ".";
             else
                 result << "Quest group fill partial: added " << added << "/" << needed
-                       << " bot" << (added == 1 ? "" : "s") << " for quest " << request.questId << ".";
+                       << " bot" << (added == 1 ? "" : "s") << subject << ".";
             if (shared)
                 result << " Quest sharing requested for " << shared << " bot" << (shared == 1 ? "" : "s") << ".";
             if (pendingTravel)
@@ -416,6 +440,17 @@ namespace
                     continue;
                 }
 
+                // Regrouping may finish while the leader is temporarily busy,
+                // but do not inject a quest-share prompt during combat, death,
+                // or battleground activity. The normal timeout still bounds
+                // how long this retry can remain pending.
+                if (!leader->IsAlive() || leader->IsInCombat() ||
+                    leader->InBattleGround() || leader->InBattleGroundQueue())
+                {
+                    ++itr;
+                    continue;
+                }
+
                 bool ready = true;
                 for (ObjectGuid const& botGuid : pending.bots)
                 {
@@ -449,12 +484,23 @@ namespace
             return itr == m_lastResult.end() ? "Quest group fill is idle." : itr->second;
         }
 
-        std::string Cancel(Player* leader) override
+        std::string Cancel(Player* leader, uint32 requestId = 0) override
         {
             if (!leader)
                 return "Quest group fill cancel failed: player not found.";
-            bool cancelled = m_pendingShares.erase(leader->GetGUIDLow()) != 0;
-            cancelled = CancelPendingActivation(leader->GetGUIDLow()) || cancelled;
+            bool cancelled = false;
+            auto share = m_pendingShares.find(leader->GetGUIDLow());
+            if (share != m_pendingShares.end() && (!requestId || share->second.requestId == requestId))
+            {
+                m_pendingShares.erase(share);
+                cancelled = true;
+            }
+            auto activation = m_pendingActivations.find(leader->GetGUIDLow());
+            if (activation != m_pendingActivations.end() && (!requestId || activation->second.requestId == requestId))
+            {
+                m_pendingActivations.erase(activation);
+                cancelled = true;
+            }
             if (!cancelled)
                 return "Quest group fill is idle; nothing was pending.";
             CleanupActivatedBots();
@@ -521,6 +567,7 @@ namespace
                     request.questId,
                     request.size,
                     leader->GetGroup() ? leader->GetGroup()->GetId() : 0,
+                    request.requestId,
                     45 * IN_MILLISECONDS,
                     0,
                     requested
@@ -572,10 +619,19 @@ namespace
 
                 Player* leader = sObjectMgr.GetPlayer(ObjectGuid(HIGHGUID_PLAYER, leaderGuid));
                 if (!leader || !leader->IsInWorld() ||
-                    leader->GetQuestStatus(pending.questId) != QUEST_STATUS_INCOMPLETE ||
-                    (pending.groupId && (!leader->GetGroup() || leader->GetGroup()->GetId() != pending.groupId)))
+                    (pending.questId && leader->GetQuestStatus(pending.questId) != QUEST_STATUS_INCOMPLETE) ||
+                    (pending.groupId && (!leader->GetGroup() || leader->GetGroup()->GetId() != pending.groupId)) ||
+                    (!pending.groupId && leader->GetGroup()) ||
+                    (leader->GetGroup() && !leader->GetGroup()->IsLeader(leader->GetObjectGuid())))
                 {
                     itr = m_pendingActivations.erase(itr);
+                    continue;
+                }
+
+                if (!leader->IsAlive() || leader->IsInCombat() ||
+                    leader->InBattleGround() || leader->InBattleGroundQueue())
+                {
+                    ++itr;
                     continue;
                 }
 
@@ -600,7 +656,7 @@ namespace
                 itr = m_pendingActivations.erase(itr);
 
                 m_resumingActivation = true;
-                Start(leader, { pending.questId, pending.size, false });
+                Start(leader, { pending.questId, pending.size, false, pending.requestId });
                 m_resumingActivation = false;
 
                 uint32 const groupSize = leader->GetGroup() ? leader->GetGroup()->GetMembersCount() : 1;
