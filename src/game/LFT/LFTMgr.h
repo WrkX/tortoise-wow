@@ -37,6 +37,7 @@ class LFTManager
         LFTManager();
 
         bool HandleAddonMessage(Player* player, uint32 type, std::string const& rawMessage);
+        std::string RequestForceBotFill(Player* player);
         void Update(uint32 diff);
         void OnPlayerLogout(ObjectGuid const& guid);
 
@@ -64,6 +65,9 @@ class LFTManager
             std::array<uint8, 3> limit = {{0, 0, 0}};
             std::array<uint8, 3> numConfirmed = {{0, 0, 0}};
             std::array<std::vector<ListingSignup>, 3> signups;
+            time_t createdAt = 0;
+            time_t nextBotFill = 0;
+            bool botFillStarted = false;
         };
 
         struct QueuedPlayer
@@ -98,6 +102,17 @@ class LFTManager
             std::map<ObjectGuid, uint8> roles;
             std::set<ObjectGuid> accepted;
             uint32 timer = 0;
+        };
+
+        struct PendingDungeonRendezvous
+        {
+            uint32 groupId = 0;
+            ObjectGuid leaderGuid;
+            std::string instance;
+            std::vector<ObjectGuid> bots;
+            bool targetConfirmed = false;
+            uint32 delay = 0;
+            uint32 timeout = 0;
         };
 
         typedef std::map<uint32, Listing> ListingsMap;
@@ -137,6 +152,8 @@ class LFTManager
         bool TryBuildOfferForInstance(std::string const& instance);
         bool CompleteOffer(uint32 offerId);
         bool AddPlayerToGroup(Group*& group, ObjectGuid const& leaderGuid, ObjectGuid const& memberGuid);
+        void ScheduleDungeonRendezvous(Offer const& offer, Group* group, ObjectGuid const& leaderGuid);
+        void UpdateDungeonRendezvous(uint32 diff);
 
         void EnsureListingsLoaded();
         void LoadListingsFromDB();
@@ -169,6 +186,7 @@ class LFTManager
 
         // Bot fill - see LFTBotFill.cpp
         void UpdateBotFill(uint32 diff);
+        void UpdateQuestListingBotFill(uint32 diff);
         void DropUnneededFillBots();
         void FillInstanceWithBots(std::string const& instance, QueuedPlayer const& waiter);
         void SeedBotOnlyQueue();
@@ -183,12 +201,16 @@ class LFTManager
         void ForgetFillBot(ObjectGuid const& guid);
         bool IsFillBot(ObjectGuid const& guid) const;
         bool RealPlayerWaitsFor(std::string const& instance, time_t& oldestJoin) const;
+        uint32 FindListingQuest(Player* leader, Listing const& listing) const;
+        uint8 GetQuestListingSize(Player* leader, Listing const& listing, uint32 questId) const;
+        bool SyncQuestListingMembers(Listing& listing, Player* leader);
 
         ListingsMap m_listings;
         QueueMap m_queue;
         RolecheckMap m_rolechecks;
         OffersMap m_offers;
         std::map<ObjectGuid, uint32> m_playerOffers;
+        std::map<uint32, PendingDungeonRendezvous> m_pendingDungeonRendezvous;
         uint32 m_nextListingId;
         uint32 m_nextOfferId;
         uint64 m_nextQueueOrder;
@@ -196,7 +218,9 @@ class LFTManager
 
         // Queue entries we created ourselves to fill a real player's group.
         std::set<ObjectGuid> m_fillBots;
+        std::map<ObjectGuid, time_t> m_forceBotFillCooldowns;
         uint32 m_botFillTimer;
+        uint32 m_questListingFillTimer;
 };
 
 extern LFTManager sLFTMgr;

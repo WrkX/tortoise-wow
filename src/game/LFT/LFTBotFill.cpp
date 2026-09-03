@@ -30,9 +30,13 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "QuestDef.h"
+#include "ScriptMgr.h"
 #include "World.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 
 namespace
 {
@@ -113,11 +117,133 @@ namespace
             return "h";
         return "d";
     }
+
+    uint32 ParseQuestReference(std::string const& text)
+    {
+        struct Marker
+        {
+            char const* text;
+            bool hyperlink;
+        };
+        static Marker const markers[] = { { "|Hquest:", true }, { "quest=", false } };
+        for (Marker const& marker : markers)
+        {
+            size_t position = text.find(marker.text);
+            if (position == std::string::npos)
+                continue;
+
+            if (!marker.hyperlink && position &&
+                !std::isspace(static_cast<unsigned char>(text[position - 1])) &&
+                text[position - 1] != '(' && text[position - 1] != '[')
+                continue;
+
+            position += std::strlen(marker.text);
+            uint64 value = 0;
+            bool foundDigit = false;
+            while (position < text.size() && std::isdigit(static_cast<unsigned char>(text[position])))
+            {
+                foundDigit = true;
+                value = value * 10 + uint64(text[position] - '0');
+                if (value > 0xFFFFFFFFULL)
+                    return 0;
+                ++position;
+            }
+
+            bool const completeToken = position == text.size() ||
+                (marker.hyperlink ? text[position] == ':' || text[position] == '|'
+                                  : std::isspace(static_cast<unsigned char>(text[position])) ||
+                                    text[position] == ')' || text[position] == ']' ||
+                                    text[position] == ',' || text[position] == '.');
+            if (foundDigit && value && completeToken)
+                return uint32(value);
+        }
+
+        return 0;
+    }
+
+    std::string NormalizeQuestTitle(std::string value)
+    {
+        size_t first = value.find_first_not_of(" \t\r\n");
+        size_t last = value.find_last_not_of(" \t\r\n");
+        if (first == std::string::npos)
+            return "";
+        value = value.substr(first, last - first + 1);
+
+        if (value.size() >= 2 && value.front() == '[' && value.back() == ']')
+            value = value.substr(1, value.size() - 2);
+
+        for (char& character : value)
+            character = char(std::tolower(static_cast<unsigned char>(character)));
+        return value;
+    }
 }
 
 bool LFTManager::IsFillBot(ObjectGuid const& guid) const
 {
     return m_fillBots.find(guid) != m_fillBots.end();
+}
+
+std::string LFTManager::RequestForceBotFill(Player* player)
+{
+    if (!player || !sWorld.getConfig(CONFIG_BOOL_LFT_BOTFILL_ENABLE))
+        return "disabled";
+
+    // This request is deliberately for a real player waiting in LFT. A bot or
+    // machine-driven character must not be able to spend the force-fill budget.
+    if (Script_IsMachineDriven(player))
+        return "not_eligible";
+
+    ObjectGuid const guid = player->GetObjectGuid();
+    QueueMap::const_iterator queued = m_queue.find(guid);
+    if (queued == m_queue.end())
+        return "not_queued";
+
+    // A premade is one queue entry per member with a shared queueLeaderGuid.
+    // Only its leader may request a fill, and only after rolecheck completion.
+    if (!queued->second.queueLeaderGuid.IsEmpty() && queued->second.queueLeaderGuid != guid)
+        return "not_leader";
+
+    for (RolecheckMap::const_iterator itr = m_rolechecks.begin(); itr != m_rolechecks.end(); ++itr)
+    {
+        if (std::find(itr->second.members.begin(), itr->second.members.end(), guid) != itr->second.members.end())
+            return "pending_rolecheck";
+    }
+
+    if (m_playerOffers.find(guid) != m_playerOffers.end())
+        return "pending_offer";
+
+    time_t const now = sWorld.GetGameTime();
+    time_t const lastRequest = m_forceBotFillCooldowns[guid];
+    uint32 const cooldown = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_COOLDOWN);
+    if (lastRequest && now >= lastRequest && uint32(now - lastRequest) < cooldown)
+        return "cooldown;" + std::to_string(cooldown - uint32(now - lastRequest));
+
+    uint32 const forceAfter = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_FORCE_AFTER);
+    uint32 const queueAge = now >= queued->second.joinTime ? uint32(now - queued->second.joinTime) : 0;
+    if (queueAge < forceAfter)
+        return "too_soon;" + std::to_string(forceAfter - queueAge);
+
+    m_forceBotFillCooldowns[guid] = now;
+    size_t const botsBefore = m_fillBots.size();
+    bool const hadOffer = m_playerOffers.find(guid) != m_playerOffers.end();
+
+    // Reuse the normal fill path so role/level/faction/hardcore checks and
+    // human-priority behavior remain identical to timer-driven filling.
+    DropUnneededFillBots();
+    QueuedPlayer const waiter = queued->second;
+    for (std::string const& instance : waiter.instances)
+        FillInstanceWithBots(instance, waiter);
+
+    // This request runs on the world thread; do not wait for the next five
+    // second bot-fill tick before running the existing matcher.
+    TryMakeOffers();
+
+    if (!hadOffer && m_playerOffers.find(guid) != m_playerOffers.end())
+        return "offer";
+    else if (m_fillBots.size() > botsBefore)
+        return "filled";
+
+    return "unavailable";
 }
 
 void LFTManager::ForgetFillBot(ObjectGuid const& guid)
@@ -303,6 +429,9 @@ Player* LFTManager::TakeFromBotOnlyGroup(uint8 wanted, QueuedPlayer const& waite
         if (bot->GetTeam() != waiter.team)
             continue;
 
+        if (bot->IsHardcore() != waiter.isHardcore)
+            continue;
+
         uint32 const botLevel = bot->GetLevel();
         if (botLevel + below < waiter.level || waiter.level + above < botLevel)
             continue;
@@ -368,6 +497,9 @@ Player* LFTManager::TakeBotAndRespecFor(uint8 wanted, QueuedPlayer const& waiter
             continue;
 
         if (bot->GetTeam() != waiter.team)
+            continue;
+
+        if (bot->IsHardcore() != waiter.isHardcore)
             continue;
 
         uint32 const botLevel = bot->GetLevel();
@@ -483,6 +615,9 @@ void LFTManager::FillInstanceWithBots(std::string const& instance, QueuedPlayer 
             if (bot->GetTeam() != waiter.team)
                 continue;
 
+            if (bot->IsHardcore() != waiter.isHardcore)
+                continue;
+
             uint32 const botLevel = bot->GetLevel();
             uint32 const lowerBound = (wanted == LFT_ROLE_HEALER) ? belowHealer : below;
             if (botLevel + lowerBound < waiterLevel || waiterLevel + above < botLevel)
@@ -582,7 +717,7 @@ void LFTManager::AcceptOffersForFillBots()
             // button nobody was going to press, so the offer expired and the
             // whole cycle started over every couple of minutes. A real player
             // still decides for themselves.
-            if (!bot || !Script_IsAIControlled(bot))
+            if (!bot || !Script_IsMachineDriven(bot))
                 continue;
 
             // Hand the assigned role to the bot's AI before it accepts. Its
@@ -645,4 +780,212 @@ void LFTManager::UpdateBotFill(uint32 diff)
 
     for (auto const& entry : pending)
         FillInstanceWithBots(entry.first, entry.second);
+}
+
+uint32 LFTManager::FindListingQuest(Player* leader, Listing const& listing) const
+{
+    if (!leader)
+        return 0;
+
+    uint32 referenced = ParseQuestReference(listing.title);
+    if (!referenced)
+        referenced = ParseQuestReference(listing.description);
+    if (referenced && leader->GetQuestStatus(referenced) == QUEST_STATUS_INCOMPLETE &&
+        sObjectMgr.GetQuestTemplate(referenced))
+        return referenced;
+
+    // The stock LFT UI has no quest-id field. Exact title matching is useful
+    // for ordinary listings while avoiding a fuzzy guess that might share the
+    // wrong quest. Ambiguous and unmatched titles remain assistant-only.
+    std::string const listingTitle = NormalizeQuestTitle(listing.title);
+    if (listingTitle.empty())
+        return 0;
+
+    uint32 match = 0;
+    for (uint16 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+    {
+        uint32 questId = leader->GetQuestSlotQuestId(slot);
+        if (!questId || leader->GetQuestStatus(questId) != QUEST_STATUS_INCOMPLETE)
+            continue;
+
+        Quest const* quest = sObjectMgr.GetQuestTemplate(questId);
+        if (!quest || NormalizeQuestTitle(quest->GetTitle()) != listingTitle)
+            continue;
+
+        if (match)
+            return 0;
+        match = questId;
+    }
+
+    return match;
+}
+
+uint8 LFTManager::GetQuestListingSize(Player* leader, Listing const& listing, uint32 questId) const
+{
+    uint32 size = uint32(listing.limit[0]) + uint32(listing.limit[1]) + uint32(listing.limit[2]);
+    if (!size && questId)
+    {
+        if (Quest const* quest = sObjectMgr.GetQuestTemplate(questId))
+            size = quest->GetSuggestedPlayers();
+    }
+    if (!size)
+        size = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_DEFAULT_SIZE);
+
+    size = std::max<uint32>(2, std::min<uint32>(5, size));
+    if (leader && leader->GetGroup())
+        size = std::max<uint32>(size, std::min<uint32>(5, leader->GetGroup()->GetMembersCount()));
+    return uint8(size);
+}
+
+bool LFTManager::SyncQuestListingMembers(Listing& listing, Player* leader)
+{
+    Group* group = leader ? leader->GetGroup() : nullptr;
+    if (!group)
+        return false;
+
+    size_t before = 0;
+    for (auto const& signups : listing.signups)
+        before += signups.size();
+    PruneListingSignups(listing);
+    RecountListing(listing);
+
+    bool changed = before != size_t(listing.numConfirmed[0] + listing.numConfirmed[1] + listing.numConfirmed[2]);
+    for (Group::MemberSlot const& slot : group->GetMemberSlots())
+    {
+        Player* member = GetPlayer(slot.guid);
+        if (!member || member == leader || !Script_IsMachineDriven(member))
+            continue;
+
+        bool alreadyListed = false;
+        for (auto const& signups : listing.signups)
+        {
+            if (std::find_if(signups.begin(), signups.end(), [&](ListingSignup const& signup)
+                { return signup.name == member->GetName(); }) != signups.end())
+            {
+                alreadyListed = true;
+                break;
+            }
+        }
+        if (alreadyListed)
+            continue;
+
+        uint8 const roles = Script_GetAllowedRoles(member);
+        int chosen = -1;
+        int bestDeficit = 0;
+        for (uint8 index = 0; index < 3; ++index)
+        {
+            if (!(roles & (1u << index)))
+                continue;
+            int const deficit = int(listing.limit[index]) - int(listing.numConfirmed[index]);
+            if (deficit > bestDeficit)
+            {
+                bestDeficit = deficit;
+                chosen = index;
+            }
+        }
+
+        if (chosen < 0)
+        {
+            if (roles & LFT_ROLE_DAMAGE)
+                chosen = 2;
+            else if (roles & LFT_ROLE_HEALER)
+                chosen = 1;
+            else if (roles & LFT_ROLE_TANK)
+                chosen = 0;
+        }
+        if (chosen < 0)
+            continue;
+
+        SetListingSignupRole(listing, member, uint8(chosen + 1));
+        RecountListing(listing);
+        changed = true;
+    }
+
+    return changed;
+}
+
+void LFTManager::UpdateQuestListingBotFill(uint32 diff)
+{
+    if (m_questListingFillTimer > diff)
+    {
+        m_questListingFillTimer -= diff;
+        return;
+    }
+    m_questListingFillTimer = 5 * IN_MILLISECONDS;
+
+    // Listings are intentionally loaded on the first addon request, when a
+    // creator can actually be online. Loading them on the first world tick
+    // would make the existing stale-listing cleanup delete every persisted
+    // row during server startup.
+    if (!m_listingsLoaded)
+        return;
+
+    bool const enabled = sWorld.getConfig(CONFIG_BOOL_LFT_BOTFILL_ENABLE) &&
+        sWorld.getConfig(CONFIG_BOOL_LFT_BOTFILL_QUEST_LISTINGS);
+    time_t const now = sWorld.GetGameTime();
+    uint32 const forceAfter = sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_FORCE_AFTER);
+
+    bool listingsChanged = false;
+    for (auto& entry : m_listings)
+    {
+        Listing& listing = entry.second;
+        if (listing.category != 2)
+            continue;
+
+        Player* leader = GetPlayer(listing.creatorGuid);
+        if (!leader || Script_IsMachineDriven(leader))
+            continue;
+
+        if (!enabled)
+        {
+            if (listing.botFillStarted)
+            {
+                Script_CancelQuestListingFill(leader, listing.id);
+                listing.botFillStarted = false;
+            }
+            continue;
+        }
+
+        Group* group = leader->GetGroup();
+        if ((group && (group->isRaidGroup() || !group->IsLeader(leader->GetObjectGuid()))) ||
+            !leader->IsAlive() || leader->IsInCombat() || leader->InBattleGround() || leader->InBattleGroundQueue())
+        {
+            if (listing.botFillStarted)
+            {
+                Script_CancelQuestListingFill(leader, listing.id);
+                listing.botFillStarted = false;
+            }
+            continue;
+        }
+
+        if (group && SyncQuestListingMembers(listing, leader))
+        {
+            SaveListingToDB(listing);
+            listingsChanged = true;
+        }
+
+        uint32 questId = FindListingQuest(leader, listing);
+        uint8 size = GetQuestListingSize(leader, listing, questId);
+        uint32 currentSize = group ? group->GetMembersCount() : 1;
+        if (currentSize >= size)
+        {
+            if (listing.botFillStarted)
+            {
+                Script_CancelQuestListingFill(leader, listing.id);
+                listing.botFillStarted = false;
+            }
+            listing.nextBotFill = now + 15;
+            continue;
+        }
+
+        if (now < listing.nextBotFill)
+            continue;
+
+        bool force = forceAfter == 0 || (now >= listing.createdAt && uint32(now - listing.createdAt) >= forceAfter);
+        listing.botFillStarted = Script_FillQuestListing(leader, listing.id, questId, size, force);
+        listing.nextBotFill = now + 15;
+    }
+
+    if (listingsChanged)
+        BroadcastGroupsList();
 }

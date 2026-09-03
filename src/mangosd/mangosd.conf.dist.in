@@ -2293,8 +2293,11 @@ GuildBank.NpcEntriesHorde = 80918
 # LFT.BotFill. Fills a waiting player's dungeon queue with random bots.
 #
 # Bots are put into the same queue real players sit in, so the existing matcher
-# handles roles, faction, hardcore and group building. Getting to the dungeon is
-# not automated: the party leader types "summon" in party chat.
+# handles roles, faction, hardcore and group building. Mixed groups remain
+# human-led. After a short delay, fill bots are automatically brought to a
+# human leader who has entered the dungeon; if the leader has not entered by
+# the timeout, they are brought to the matching game_tele entrance instead.
+# Humans are never moved. The manual "summon" command remains available.
 #
 #   DelaySeconds  how long a real player waits before bots are added. Filling
 #                 instantly would mean nobody ever waits for a human again.
@@ -2315,11 +2318,50 @@ GuildBank.NpcEntriesHorde = 80918
 #                 being hit. Healers are also the scarcer half of the shortage,
 #                 so a tighter bound here costs groups that would otherwise
 #                 have formed.
+#   ForceAfterSeconds
+#                 minimum time a real player must have waited before requesting
+#                 an immediate bot fill. The request still uses all normal
+#                 eligibility and human-priority rules.
+#   ForceCooldownSeconds
+#                 per-character cooldown between force requests.
+#   RendezvousDelaySeconds
+#                 delay after an offer completes before moving scattered fill
+#                 bots. A short delay gives the leader time to enter normally.
+#   RendezvousTimeoutSeconds
+#                 maximum wait for the leader to enter the dungeon. On expiry,
+#                 bots go to the resolved game_tele entrance. Missing entrances
+#                 cancel the rendezvous without moving anyone.
+#   QuestListings automatically fills ordinary category-2 "Quests & Zones"
+#                 listings when the master LFT.BotFill.Enable switch is on.
+#                 No command is required. The role limits determine
+#                 the target size; a listing without limits uses the matched
+#                 quest's suggested size, then QuestDefaultSize as fallback.
+#                 When free-form listing text cannot identify exactly one
+#                 active quest, bots still join as assistants but no quest is
+#                 shared automatically.
+#   QuestDelaySeconds
+#                 time to leave the listing available to real players before
+#                 adding compatible online bots.
+#   QuestForceAfterSeconds
+#                 listing age after which bounded inactive random bots may be
+#                 activated when the online population cannot fill the group.
+#                 Set to 0 to permit that fallback on the first fill attempt.
+#   QuestDefaultSize
+#                 target party size (2-5) when neither roles nor an exact
+#                 active-quest title provide one.
 LFT.BotFill.Enable = 0
 LFT.BotFill.DelaySeconds = 60
 LFT.BotFill.LevelRangeBelow = 2
 LFT.BotFill.LevelRangeBelowHealer = 4
 LFT.BotFill.LevelRangeAbove = 6
+LFT.BotFill.ForceAfterSeconds = 30
+LFT.BotFill.ForceCooldownSeconds = 60
+LFT.BotFill.RendezvousDelaySeconds = 15
+LFT.BotFill.RendezvousTimeoutSeconds = 90
+LFT.BotFill.QuestListings = 1
+LFT.BotFill.QuestDelaySeconds = 60
+LFT.BotFill.QuestForceAfterSeconds = 180
+LFT.BotFill.QuestDefaultSize = 5
 
 
 # AutoScaler.Enable. Enable or disable instance auto-scaling. 0 = off, 1 = on.

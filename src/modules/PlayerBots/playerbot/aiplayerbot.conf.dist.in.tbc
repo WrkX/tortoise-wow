@@ -23,6 +23,19 @@ AiPlayerbot.ExplicitDbStoreSave = 0
 # Keep random bots logged out for an BotInWorldTime interval
 # AiPlayerbot.RandomBotTimedOffline = 0
 
+# Automatically detach listing assistants after their exact quest is no longer
+# active. Seconds; 0 disables this policy. The grace avoids detaching between
+# objective completion and turn-in.
+AiPlayerbot.QuestGroupFillQuestGraceSeconds = 120
+
+# Automatically detach listing assistants after this long without combat or movement.
+# Seconds; 0 disables this policy. Combat/movement/death/teleport/BG activity defers it.
+AiPlayerbot.QuestGroupFillIdleSeconds = 900
+
+# Automatically detach listing assistants if the original leader remains offline.
+# Seconds; 0 disables this policy. The assistant must be alive and safe to remove.
+AiPlayerbot.QuestGroupFillOwnerOfflineSeconds = 300
+
 # Login Bots when real players login
 # AiPlayerbot.RandomBotLoginWithPlayer = 0
 

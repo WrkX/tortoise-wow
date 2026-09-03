@@ -29,6 +29,8 @@
 #include "ahbot/AhBot.h"
 #include "BotDiagnostics.h"
 #include "playerbot/BotSlots.h"
+#include "QuestGroupFillService.h"
+#include "QuestGroupFill.h"
 
 class PlayerbotWorldScript : public WorldScript
 {
@@ -42,6 +44,7 @@ class PlayerbotWorldScript : public WorldScript
         {
             if (!sPlayerbotAIConfig.enabled)
                 return;
+            RegisterQuestGroupFillService();
             RandomPlayerbotFactory::CreateRandomBots();
             auctionbot.Init();
         }
@@ -51,6 +54,7 @@ class PlayerbotWorldScript : public WorldScript
         {
             if (!sPlayerbotAIConfig.enabled)
                 return;
+            UpdateQuestGroupFillService(diff);
             sRandomPlayerbotMgr.UpdateAI(diff);
             auctionbot.Update();
             sPlayerbotAiExtension.RunWorldUpdate(diff);
@@ -186,6 +190,22 @@ class PlayerbotPlayerScript : public PlayerScript
             }
 
             ai->ResetStrategies();
+        }
+
+        bool FillQuestListing(Player* leader, uint32 listingId, uint32 questId, uint8 size, bool force) override
+        {
+            QuestGroupFill::Service* service = QuestGroupFill::GetService();
+            if (!service)
+                return false;
+
+            service->Start(leader, { questId, size, force, listingId });
+            return true;
+        }
+
+        void CancelQuestListingFill(Player* leader, uint32 listingId) override
+        {
+            if (QuestGroupFill::Service* service = QuestGroupFill::GetService())
+                service->Cancel(leader, listingId);
         }
 
         // Was Player_DispatchBotChatCommand().

@@ -247,6 +247,21 @@ void AttackersValue::AddTargetsOf(Player* player, std::set<Unit*>& targets, std:
                 }
             }
         }
+        else if (player->IsInCombat())
+        {
+            // A real player's offensive pull is not present in getAttackers():
+            // that list only contains units attacking the player. Include the
+            // selected creature while the player is genuinely in combat so
+            // nearby group bots can assist through the normal validity filter
+            // below. Restrict this to creatures to avoid turning a player's
+            // selection into an implicit PvP command.
+            ObjectGuid selection = player->GetSelectionGuid();
+            if (selection.IsCreature())
+            {
+                if (Unit* selectedTarget = ai->GetUnit(selection))
+                    units.insert(selectedTarget);
+            }
+        }
 
         // Get the current attackers of the player
         for (Unit* attacker : player->getAttackers())

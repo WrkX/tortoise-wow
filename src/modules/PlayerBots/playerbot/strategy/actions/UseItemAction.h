@@ -356,6 +356,19 @@ namespace ai
         bool ShouldReactionInterruptMovement() const override { return true; }
     };
 
+    // Use a nearby game object only when it is an active objective of one of
+    // the bot's incomplete quests.  This intentionally does not move the bot
+    // to the object; the normal follow/leash behavior remains authoritative.
+    class UseSharedQuestObjectAction : public UseAction
+    {
+    public:
+        UseSharedQuestObjectAction(PlayerbotAI* ai) : UseAction(ai, "use shared quest object") {}
+
+        virtual bool isUseful() override;
+        virtual bool isPossible() override { return true; }
+        virtual bool Execute(Event& event) override;
+    };
+
     // goblin sappers
     class UseGoblinSapperChargeAction : public UseItemIdAction
     {

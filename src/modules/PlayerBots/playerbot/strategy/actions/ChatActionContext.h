@@ -114,6 +114,7 @@ namespace ai
             creators["taxi"] = [](PlayerbotAI* ai) { return new TaxiAction(ai); };
             creators["repair"] = [](PlayerbotAI* ai) { return new RepairAllAction(ai); };
             creators["use"] = [](PlayerbotAI* ai) { return new UseAction(ai); };
+            creators["use shared quest object"] = [](PlayerbotAI* ai) { return new UseSharedQuestObjectAction(ai); };
             creators["item count"] = [](PlayerbotAI* ai) { return new TellItemCountAction(ai); };
             creators["equip"] = [](PlayerbotAI* ai) { return new EquipAction(ai); };
             creators["equip upgrades"] = [](PlayerbotAI* ai) { return new EquipUpgradesAction(ai); };
