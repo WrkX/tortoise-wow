@@ -1,10 +1,15 @@
 #pragma once
 
 #include <atomic>
+#include <list>
+#include <map>
 #include <mutex>
+#include <set>
+#include <string>
 #include <vector>
 #include "Category.h"
 #include "ItemBag.h"
+#include "AhBotEconomy.h"
 #include "playerbot/PlayerbotAIBase.h"
 #include "AuctionHouse/AuctionHouseMgr.h"
 #include "ObjectGuid.h"
@@ -20,12 +25,41 @@
 #define AHBOT_SELL_DELAY 5
 #define AHBOT_SENDMAIL 6
 
+class ChatHandler;
+
 namespace ahbot
 {
+    struct CycleCache
+    {
+        bool valid = false;
+        std::map<uint64, double> marketPrices;
+        std::map<std::string, uint32> historyTimes;
+        std::map<uint64, uint32> answerCounts;
+        std::map<std::string, uint32> categoryDayCounts;
+        std::map<uint64, uint32> itemDayCounts;
+        std::map<uint32, uint32> vendorBuyPrice;
+        std::map<uint32, PricePercentiles> priceStats;
+        std::map<uint32, uint32> listingSeen;
+        std::map<uint32, uint32> listingSnapshots;
+        std::map<uint32, uint32> historyBidSum; // key: faction * 10 + won
+        std::map<uint32, uint32> lastSelfBuyTime; // faction
+        std::map<uint32, int64> availableMoney;
+        size_t priceStatRows = 0;
+        size_t listingStatRows = 0;
+        size_t marketRows = 0;
+    };
+
+    struct HouseSnapshotIndex
+    {
+        std::map<uint32, uint32> lowestBuyoutPerUnit;
+        std::map<uint32, uint32> botActiveCount;
+        uint32 totalCount = 0;
+    };
+
     class AhBot
     {
     public:
-        AhBot() : nextAICheckTime(0), updating(false) {}
+        AhBot() : nextAICheckTime(0), updating(false), dryRun(false), pendingSimulate(false) {}
         virtual ~AhBot();
         static AhBot& instance()
         {
@@ -38,8 +72,9 @@ namespace ahbot
         ObjectGuid GetAHBplayerGUID();
         void Init();
         void Update();
-        void ForceUpdate();
-        void HandleCommand(std::string command);
+        void ForceUpdate(bool simulate = false);
+        void RequestUpdate(bool simulate = false);
+        void HandleCommand(std::string command, ChatHandler* handler = nullptr);
         void Won(AuctionEntry* entry) { AddToHistory(entry); }
         void Expired(AuctionEntry* entry) {}
 
@@ -53,18 +88,26 @@ namespace ahbot
         double GetRarityPriceMultiplier(const ItemPrototype* proto);
         bool IsUsedBySkill(const ItemPrototype* proto, uint32 skillId);
 
+        bool TryGetCachedMarketPrice(uint32 itemId, uint32 auctionHouse, double& outPrice);
+        bool HasCycleCache();
+        uint32 GetCachedCategoryDayCount(const std::string& category, uint32 faction);
+        uint32 GetCachedItemDayCount(uint32 itemId, uint32 faction);
+        bool TryGetPriceStats(uint32 itemId, PricePercentiles& outStats);
+        uint32 GetVendorBuyPrice(uint32 itemId);
+        bool IsDryRun() const { return dryRun; }
+
     private:
-        int Answer(int auction, Category* category, ItemBag* inAuctionItems);
-        int AddAuctions(int auction, Category* category, ItemBag* inAuctionItems);
-        int AddAuction(int auction, Category* category, const ItemPrototype* proto);
+        int Answer(int auction, Category* category, ItemBag* inAuctionItems, const HouseSnapshotIndex& index);
+        int AddAuctions(int auction, Category* category, ItemBag* inAuctionItems, const HouseSnapshotIndex& index, int& remainingCycle);
+        int AddAuction(int auction, Category* category, const ItemPrototype* proto, const HouseSnapshotIndex& index);
         void Expire(int auction);
-        void PrintStats(int auction);
+        void PrintStats(int auction, ChatHandler* handler);
         void AddToHistory(AuctionEntry* entry, uint32 won = 0);
         void CleanupHistory();
         uint32 GetAvailableMoney(uint32 auctionHouse);
         void CheckCategoryMultipliers();
         void updateMarketPrice(uint32 itemId, double price, uint32 auctionHouse);
-        bool IsBotAuction(uint32 bidder);
+        bool IsBotAuction(uint32 bidder) const;
         uint32 GetRandomBidder(uint32 auctionHouse);
         void LoadRandomBots();
         uint32 GetAnswerCount(uint32 itemId, uint32 auctionHouse, uint32 withinTime);
@@ -73,7 +116,7 @@ namespace ahbot
         // underneath it. See the comment on AuctionSnapshot in AuctionHouseMgr.h.
         std::vector<AuctionSnapshot> LoadAuctions(const std::vector<AuctionSnapshot>& auctionEntryMap, Category*& category,
                 int& auction);
-        void FindMinPrice(const std::vector<AuctionSnapshot>& auctionEntryMap, const AuctionSnapshot& entry, Item*& item, uint32* minBid,
+        void FindMinPrice(const std::vector<AuctionSnapshot>& auctionEntryMap, const AuctionSnapshot& entry, uint32 itemId, uint32 itemCount, uint32* minBid,
                 uint32* minBuyout);
         uint32 GetBuyTime(uint32 entry, uint32 itemId, uint32 auctionHouse, Category*& category, double priceLevel);
         uint32 GetTime(std::string category, uint32 id, uint32 auctionHouse, uint32 type);
@@ -84,6 +127,24 @@ namespace ahbot
         void Dump();
         void CleanupPropositions();
         void DeleteMail(std::list<uint32> buffer);
+
+        void LoadCycleCache();
+        void AssignSellerPersonas();
+        SellerPersona GetPersonaForBidder(uint32 guid) const;
+        HouseSnapshotIndex BuildHouseIndex(const std::vector<AuctionSnapshot>& snaps) const;
+        uint32 ResolveHouseTarget(int auction, uint32 currentCount);
+        uint32 GetHouseMinItems(int auction) const;
+        uint32 GetHouseMaxItems(int auction) const;
+        uint32 GetHouseTargetPercent(int auction) const;
+        uint32 ChooseListingStack(const ItemPrototype* proto, Category* category);
+        uint32 ApplySellPriceAdjustments(const ItemPrototype* proto, uint32 unitPrice, uint32 owner, const HouseSnapshotIndex& index, Category* category);
+        void CommandReply(ChatHandler* handler, const std::string& line);
+        void PrintStatus(ChatHandler* handler);
+        bool HasWeightedProportions() const;
+        Category* PickWeightedCategory();
+        std::string ItemClassKey(uint32 itemClass) const;
+        static uint64 CacheKey(uint32 a, uint32 b);
+        static std::string HistoryTimeKey(const std::string& category, uint32 id, uint32 faction, uint32 type);
 
     public:
         // Work the bot thread decides on but must not carry out itself.
@@ -135,8 +196,13 @@ namespace ahbot
         std::mutex queuedWorkMutex;
         std::vector<PendingPurchase> queuedPurchases;
         std::vector<PendingProposition> queuedPropositions;
+        std::mutex cacheMutex;
+        CycleCache cycleCache;
+        std::map<uint32, SellerPersona> sellerPersonas;
+        std::map<uint32, uint32> houseTargets;
+        bool dryRun;
+        std::atomic<bool> pendingSimulate;
     };
 };
 
 #define auctionbot MaNGOS::Singleton<ahbot::AhBot>::Instance()
-

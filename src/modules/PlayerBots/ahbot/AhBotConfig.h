@@ -1,6 +1,12 @@
 #pragma once
 
 #include "Config/Config.h"
+#include "AhBotEconomy.h"
+#include <map>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
 
 class AhBotConfig
 {
@@ -14,8 +20,11 @@ public:
 
 public:
     bool Initialize();
+    bool Reload();
 
     bool enabled;
+    bool sellerEnabled;
+    bool buyerEnabled;
     uint64 guid;
     uint32 updateInterval;
     uint32 historyDays, maxSellInterval;
@@ -29,6 +38,51 @@ public:
     std::set<uint32> ignoreItemIds;
     std::set<uint32> ignoreVendorItemIds;
     bool sendmail;
+
+    uint32 itemsPerCycle;
+    uint32 allianceMinItems, allianceMaxItems, allianceTargetPercent;
+    uint32 hordeMinItems, hordeMaxItems, hordeTargetPercent;
+    uint32 neutralMinItems, neutralMaxItems, neutralTargetPercent;
+
+    bool customPriceStatsEnabled;
+    uint32 customPriceStatsMinSampleCount;
+    uint32 customPriceStatsBuyerMaxAcceptedPercentile;
+
+    bool listingStatsEnabled;
+    uint32 listingStatsMinSeenCount;
+    float listingStatsFallbackWeight;
+    float listingStatsScarcityExponent;
+
+    bool maxActiveEnabled;
+    uint32 maxActiveDefault;
+    bool dynamicSupplyEnabled;
+    bool dynamicSupplyDebug;
+
+    bool sellerPersonasEnabled;
+    bool undercuttingEnabled;
+    float undercutPercentMin;
+    float undercutPercentMax;
+    float priceFloorStatsMultiplier;
+
+    uint32 maxBuyoutPrice;
+    float buyoutVariationReducePercent;
+    float buyoutVariationAddPercent;
+    float bidVariationHighReducePercent;
+    float bidVariationLowReducePercent;
+    bool vendorFloorEnabled;
+    float vendorFloorAddPercent;
+    bool stackRulesEnabled;
+
+    uint32 buyerCandidatesMin;
+    uint32 buyerCandidatesMax;
+    float buyerAcceptablePriceModifier;
+    bool buyerAlwaysBidMax;
+    bool buyerPreventOverpayVendor;
+    bool buyerWillBidAgainstPlayers;
+
+    uint32 listingExpireMinSeconds;
+    uint32 listingExpireMaxSeconds;
+    bool realismDebug;
 
     float GetSellPriceMultiplier(std::string category)
     {
@@ -53,7 +107,37 @@ public:
     int32 GetMaxAllowedItemAuctionCount(std::string category, int32 default_value)
     {
         return (int32)GetCategoryParameter(maxItemAuctionCount, "MaxItemTypeCount", category, default_value);
-    }    
+    }
+
+    int32 GetListProportion(std::string category)
+    {
+        return (int32)GetCategoryParameter(listProportions, "ListProportion", category, 0.0f);
+    }
+
+    int32 GetMaxActiveForCategory(std::string category)
+    {
+        return (int32)GetCategoryParameter(maxActiveByCategory, "MaxActive", category, (float)maxActiveDefault);
+    }
+
+    int32 GetEmptyMarketChance(std::string category)
+    {
+        return (int32)GetCategoryParameter(emptyMarketChance, "DynamicSupply.EmptyMarketChance", category, 0.0f);
+    }
+
+    int32 GetStackRatio(std::string classKey)
+    {
+        return (int32)GetCategoryParameter(stackRatio, "Stack.RandomRatio", classKey, 0.0f);
+    }
+
+    int32 GetStackIncrement(std::string classKey)
+    {
+        return (int32)GetCategoryParameter(stackIncrement, "Stack.Increment", classKey, 1.0f);
+    }
+
+    int32 GetStackMax(std::string classKey)
+    {
+        return (int32)GetCategoryParameter(stackMax, "Stack.Max", classKey, 0.0f);
+    }
 
     std::string GetStringDefault(const char* name, const char* def)
     {
@@ -75,6 +159,8 @@ public:
         return config.GetFloatDefault(name, def);
     }
 
+    void ParseMinMax(const std::string& value, uint32& outMin, uint32& outMax, uint32 defaultValue);
+
 private:
     float GetCategoryParameter(std::map<std::string, float>& cache, std::string type, std::string category, float defaultValue)
     {
@@ -87,6 +173,21 @@ private:
         return cache[category];
     }
 
+    void ClearCategoryCaches()
+    {
+        sellPriceMultipliers.clear();
+        buyPriceMultipliers.clear();
+        itemPriceMultipliers.clear();
+        maxAuctionCount.clear();
+        maxItemAuctionCount.clear();
+        listProportions.clear();
+        maxActiveByCategory.clear();
+        emptyMarketChance.clear();
+        stackRatio.clear();
+        stackIncrement.clear();
+        stackMax.clear();
+    }
+
 private:
     Config config;
     std::map<std::string, float> sellPriceMultipliers;
@@ -94,7 +195,12 @@ private:
     std::map<std::string, float> itemPriceMultipliers;
     std::map<std::string, float> maxAuctionCount;
     std::map<std::string, float> maxItemAuctionCount;
+    std::map<std::string, float> listProportions;
+    std::map<std::string, float> maxActiveByCategory;
+    std::map<std::string, float> emptyMarketChance;
+    std::map<std::string, float> stackRatio;
+    std::map<std::string, float> stackIncrement;
+    std::map<std::string, float> stackMax;
 };
 
 #define sAhBotConfig MaNGOS::Singleton<AhBotConfig>::Instance()
-
