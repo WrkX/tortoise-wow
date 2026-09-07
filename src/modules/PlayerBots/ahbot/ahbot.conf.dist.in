@@ -307,17 +307,18 @@ AhBot.DynamicSupply.DEBUG = 0
 ###################################################################################################################
 # PERCENTILE PRICE STATS
 #
-# Loaded from world.ahbot_price_stats (empty schema until the Aux importer
-# fills Vanilla rows). If a row is missing or sample_count is below
-# MinSampleCount, the existing formula/market path is used. Do not import
-# WotLK item IDs into this table.
+# Loaded from characters.ahbot_price_stats (empty schema until the Aux importer
+# fills Vanilla rows keyed by item_id, suffix_id, auction_house). If a row is
+# missing or sample_count is below MinSampleCount, the existing formula/market
+# path is used. Do not import WotLK-only dumps; Turtle custom ids occupy both
+# 24284-49999 and 50000+.
 ###################################################################################################################
 
 AhBot.CustomPriceStats.Enabled = 0
 AhBot.CustomPriceStats.MinSampleCount = 3
 AhBot.CustomPriceStats.Buyer.MaxAcceptedPercentile = 90
 
-# Optional scarcity weights from world.ahbot_listing_stats. Off by default.
+# Optional scarcity weights from characters.ahbot_listing_stats. Off by default.
 AhBot.ListingStats.Enabled = 0
 AhBot.ListingStats.MinSeenCount = 2
 AhBot.ListingStats.FallbackWeight = 1

@@ -41,7 +41,7 @@ uint32 PricingStrategy::GetSellPrice(ItemPrototype const* proto, uint32 auctionH
     if (sAhBotConfig.customPriceStatsEnabled)
     {
         PricePercentiles stats;
-        if (auctionbot.TryGetPriceStats(proto->ItemId, stats))
+        if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))
         {
             uint32 rolled = RollPercentilePrice(stats, sAhBotConfig.customPriceStatsMinSampleCount, false,
                 explain ? 50 : urand(1, 100), explain ? 0 : urand(0, 0x7fffffff));
@@ -114,7 +114,7 @@ uint32 PricingStrategy::GetBuyPrice(ItemPrototype const* proto, uint32 auctionHo
     if (sAhBotConfig.customPriceStatsEnabled)
     {
         PricePercentiles stats;
-        if (auctionbot.TryGetPriceStats(proto->ItemId, stats))
+        if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))
         {
             uint32 rolled = RollPercentilePrice(stats, sAhBotConfig.customPriceStatsMinSampleCount, true,
                 explain ? 50 : urand(1, 100), explain ? 0 : urand(0, 0x7fffffff));

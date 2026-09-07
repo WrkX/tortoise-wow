@@ -81,8 +81,12 @@ bool AhBotConfig::Initialize()
     historyDays = config.GetIntDefault("AhBot.History.Days", 30);
     itemBuyMinInterval = config.GetIntDefault("AhBot.ItemBuyMinInterval", 600);
     itemBuyMaxInterval = config.GetIntDefault("AhBot.ItemBuyMaxInterval", 7200);
+    if (itemBuyMaxInterval && itemBuyMinInterval > itemBuyMaxInterval)
+        std::swap(itemBuyMinInterval, itemBuyMaxInterval);
     itemSellMinInterval = config.GetIntDefault("AhBot.ItemSellMinInterval", 600);
     itemSellMaxInterval = config.GetIntDefault("AhBot.ItemSellMaxInterval", 7200);
+    if (itemSellMaxInterval && itemSellMinInterval > itemSellMaxInterval)
+        std::swap(itemSellMinInterval, itemSellMaxInterval);
     maxSellInterval = config.GetIntDefault("AhBot.MaxSellInterval", 3600 * 8);
     alwaysAvailableMoney = config.GetIntDefault("AhBot.AlwaysAvailableMoney", 200000);
     priceMultiplier = config.GetFloatDefault("AhBot.PriceMultiplier", 1.0f);

@@ -78,6 +78,9 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
+        self.assertIn("INSERT INTO `ahbot_price_stats`", sql)
+        self.assertIn("INSERT INTO `ahbot_listing_stats`", sql)
+        self.assertNotIn("ahbot_custom_price_stats", sql)
         self.assertIn(
             "VALUES (2580, 0, 1, 10, 10, 10, 30, 50, 80, 90, 100)",
             sql,
@@ -128,7 +131,7 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertEqual(code, 0)
         # snapshot_count=3 (files), days_seen=2, seen_count=2, listing_count=3
         self.assertIn(
-            "INSERT INTO `ahbot_custom_listing_stats` "
+            "INSERT INTO `ahbot_listing_stats` "
             "(`item_id`, `suffix_id`, `auction_house`, `snapshot_count`, `days_seen`, "
             "`seen_count`, `listing_count`) VALUES (2580, 0, 1, 3, 2, 2, 3)",
             sql,
@@ -175,7 +178,7 @@ class BuilderEndToEndTests(unittest.TestCase):
         code, sql = self.run_builder(str(snapshot), "--allow-incomplete")
         self.assertEqual(code, 0)
         self.assertIn("VALUES (2580, 0, 1, 1, 25, 25, 25, 25, 25, 25, 25)", sql)
-        self.assertNotIn("99", sql.split("ahbot_custom_price_stats", 1)[-1].split("ahbot_price", 1)[0])
+        self.assertNotIn("99", sql.split("ahbot_price_stats", 1)[-1].split("ahbot_price", 1)[0])
 
     def test_legacy_private_project_insert_lines(self) -> None:
         snapshot = write_sql(
@@ -232,8 +235,8 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
-        self.assertIn("TRUNCATE TABLE `ahbot_custom_price_stats`;", sql)
-        self.assertIn("TRUNCATE TABLE `ahbot_custom_listing_stats`;", sql)
+        self.assertIn("TRUNCATE TABLE `ahbot_price_stats`;", sql)
+        self.assertIn("TRUNCATE TABLE `ahbot_listing_stats`;", sql)
         self.assertIn("ON DUPLICATE KEY UPDATE", sql)
 
     def test_incomplete_metadata_fails_without_flag(self) -> None:
@@ -255,7 +258,37 @@ class BuilderEndToEndTests(unittest.TestCase):
         code, _sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 1)
 
-    def test_wotlk_item_ids_are_rejected(self) -> None:
+    def test_turtle_custom_ids_in_expansion_numeric_gap_are_kept(self) -> None:
+        snapshot = write_sql(
+            self.root / "nordanaar_alliance_2026-09-01.sql",
+            "-- AHBOT_SNAPSHOT faction=alliance date=2026-09-01\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (2580, 40);\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (42287, 50000);\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (55371, 80);\n",
+        )
+        code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 1, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (42287, 0, 1, 1, 50000, 50000, 50000, 50000, 50000, 50000, 50000)", sql)
+        self.assertIn("VALUES (55371, 0, 1, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
+
+    def test_reject_expansion_ids_drops_gap_including_turtle_customs(self) -> None:
+        snapshot = write_sql(
+            self.root / "nordanaar_alliance_2026-09-01.sql",
+            "-- AHBOT_SNAPSHOT faction=alliance date=2026-09-01\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (2580, 40);\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (37650, 999);\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (42287, 50000);\n"
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (55371, 80);\n",
+        )
+        code, sql = self.run_builder(str(snapshot), "--reject-expansion-ids")
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 1, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (55371, 0, 1, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
+        self.assertNotIn("37650", sql)
+        self.assertNotIn("42287", sql)
+
+    def test_wotlk_item_ids_are_kept_by_default(self) -> None:
         snapshot = write_sql(
             self.root / "nordanaar_alliance_2026-09-01.sql",
             "-- AHBOT_SNAPSHOT faction=alliance date=2026-09-01\n"
@@ -266,8 +299,8 @@ class BuilderEndToEndTests(unittest.TestCase):
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
         self.assertIn("VALUES (2580, 0, 1, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (37650, 0, 1, 1, 999, 999, 999, 999, 999, 999, 999)", sql)
         self.assertIn("VALUES (55371, 0, 1, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
-        self.assertNotIn("37650", sql)
 
     def test_schema_charset_matches_repo(self) -> None:
         schema = (
@@ -280,7 +313,14 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertIn("DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci", text)
         self.assertIn("`days_seen`", text)
         self.assertIn("`listing_count`", text)
+        self.assertIn("CREATE TABLE IF NOT EXISTS `ahbot_price_stats`", text)
+        self.assertIn("CREATE TABLE IF NOT EXISTS `ahbot_listing_stats`", text)
+        self.assertIn("PRIMARY KEY (`item_id`, `suffix_id`, `auction_house`)", text)
+        self.assertNotIn("ahbot_custom_price_stats", text)
         self.assertNotIn("utf8mb4", text)
+        self.assertIn(builder.CREATE_PRICE_STATS_SQL.strip(), text)
+        self.assertIn(builder.CREATE_LISTING_STATS_SQL.strip(), text)
+        self.assertIn(builder.CREATE_SOURCE_SQL.strip(), text)
 
 
 class HelperTests(unittest.TestCase):
@@ -288,6 +328,13 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(builder.parse_item_identifier("754:5"), (754, 5))
         self.assertEqual(builder.parse_item_identifier("'754-12'"), (754, 12))
         self.assertEqual(builder.parse_item_identifier("2580"), (2580, 0))
+
+    def test_turtle_id_filter_assumption(self) -> None:
+        self.assertTrue(builder.is_turtle_compatible_item_id(42287, reject_expansion_ids=False))
+        self.assertTrue(builder.is_turtle_compatible_item_id(55371, reject_expansion_ids=False))
+        self.assertFalse(builder.is_turtle_compatible_item_id(42287, reject_expansion_ids=True))
+        self.assertTrue(builder.is_turtle_compatible_item_id(55371, reject_expansion_ids=True))
+        self.assertFalse(builder.is_turtle_compatible_item_id(37650, reject_expansion_ids=True))
 
     def test_path_inference(self) -> None:
         meta = builder.infer_meta_from_path(

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 #include "Category.h"
 #include "ItemBag.h"
@@ -29,6 +30,22 @@ class ChatHandler;
 
 namespace ahbot
 {
+    struct ItemStatKey
+    {
+        uint32 itemId = 0;
+        int32 suffixId = 0;
+        uint32 auctionHouse = 0;
+
+        bool operator<(const ItemStatKey& other) const
+        {
+            if (itemId != other.itemId)
+                return itemId < other.itemId;
+            if (suffixId != other.suffixId)
+                return suffixId < other.suffixId;
+            return auctionHouse < other.auctionHouse;
+        }
+    };
+
     struct CycleCache
     {
         bool valid = false;
@@ -38,10 +55,10 @@ namespace ahbot
         std::map<std::string, uint32> categoryDayCounts;
         std::map<uint64, uint32> itemDayCounts;
         std::map<uint32, uint32> vendorBuyPrice;
-        std::map<uint32, PricePercentiles> priceStats;
-        std::map<uint32, uint32> listingSeen;
-        std::map<uint32, uint32> listingSnapshots;
-        std::map<uint32, uint32> historyBidSum; // key: faction * 10 + won
+        std::map<ItemStatKey, PricePercentiles> priceStats;
+        std::map<ItemStatKey, uint32> listingSeen;
+        std::map<ItemStatKey, uint32> listingSnapshots;
+        std::map<uint32, uint64> historyBidSum; // key: faction * 10 + won
         std::map<uint32, uint32> lastSelfBuyTime; // faction
         std::map<uint32, int64> availableMoney;
         size_t priceStatRows = 0;
@@ -92,7 +109,7 @@ namespace ahbot
         bool HasCycleCache();
         uint32 GetCachedCategoryDayCount(const std::string& category, uint32 faction);
         uint32 GetCachedItemDayCount(uint32 itemId, uint32 faction);
-        bool TryGetPriceStats(uint32 itemId, PricePercentiles& outStats);
+        bool TryGetPriceStats(uint32 itemId, uint32 auctionHouse, PricePercentiles& outStats, int32 suffixId = 0);
         uint32 GetVendorBuyPrice(uint32 itemId);
         bool IsDryRun() const { return dryRun; }
 
@@ -137,7 +154,7 @@ namespace ahbot
         uint32 GetHouseMaxItems(int auction) const;
         uint32 GetHouseTargetPercent(int auction) const;
         uint32 ChooseListingStack(const ItemPrototype* proto, Category* category);
-        uint32 ApplySellPriceAdjustments(const ItemPrototype* proto, uint32 unitPrice, uint32 owner, const HouseSnapshotIndex& index, Category* category);
+        uint32 ApplySellPriceAdjustments(const ItemPrototype* proto, uint32 unitPrice, uint32 owner, const HouseSnapshotIndex& index, Category* category, uint32 auctionHouse);
         void CommandReply(ChatHandler* handler, const std::string& line);
         void PrintStatus(ChatHandler* handler);
         bool HasWeightedProportions() const;
@@ -145,12 +162,14 @@ namespace ahbot
         std::string ItemClassKey(uint32 itemClass) const;
         static uint64 CacheKey(uint32 a, uint32 b);
         static std::string HistoryTimeKey(const std::string& category, uint32 id, uint32 faction, uint32 type);
+        static ItemStatKey MakeStatKey(uint32 itemId, int32 suffixId, uint32 auctionHouse);
+        void InvalidateCycleCache();
+        void StartWorker();
 
     public:
         // Work the bot thread decides on but must not carry out itself.
-        // Completing a purchase sends mail, pushes a packet down the seller's
-        // session and, when the seller happens to be online, reaches into their
-        // live Player object - all of that belongs to the world thread.
+        // Completing a purchase sends mail, posting a listing mutates the
+        // live auction map, and both belong to the world thread.
         // AhBot::Update() already runs there (World::UpdatePlayerbotsTick), so
         // the bot thread only records the decision and RunQueuedWork() carries
         // it out.
@@ -175,9 +194,21 @@ namespace ahbot
             time_t expireTime;
         };
 
+        struct PendingListing
+        {
+            int    houseIndex;
+            uint32 owner;
+            uint32 itemId;
+            uint32 stackCount;
+            uint32 bidPrice;
+            uint32 buyoutPrice;
+            uint32 auctionTime;
+        };
+
         void RunQueuedWork();                                   // world thread only
         void ExecutePurchase(const PendingPurchase& p);         // world thread only
         void ExecuteProposition(const PendingProposition& p);   // world thread only
+        void ExecuteListing(const PendingListing& p);           // world thread only
 
         static uint32 auctionIds[MAX_AUCTIONS];
         static uint32 auctioneers[MAX_AUCTIONS];
@@ -196,12 +227,15 @@ namespace ahbot
         std::mutex queuedWorkMutex;
         std::vector<PendingPurchase> queuedPurchases;
         std::vector<PendingProposition> queuedPropositions;
+        std::vector<PendingListing> queuedListings;
         std::mutex cacheMutex;
         CycleCache cycleCache;
         std::map<uint32, SellerPersona> sellerPersonas;
         std::map<uint32, uint32> houseTargets;
         bool dryRun;
         std::atomic<bool> pendingSimulate;
+        std::mutex workerMutex;
+        std::thread workerThread;
     };
 };
 

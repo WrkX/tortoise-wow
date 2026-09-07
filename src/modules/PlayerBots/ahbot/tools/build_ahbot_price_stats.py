@@ -6,7 +6,9 @@ lines), aggregates nearest-rank percentiles and availability, and emits
 idempotent SQL for the characters-database tables next to ahbot_price.
 
 Presence frequency (days_seen / seen_count) is tracked separately from
-listing_count. WotLK-range item ids are rejected by default.
+listing_count. Item ids are kept by default so Turtle custom entries in
+24284-49999 are not discarded; pass --reject-expansion-ids only when ingesting
+a known WotLK dump.
 """
 
 from __future__ import annotations
@@ -42,10 +44,13 @@ FACTION_NAMES = {
     AUCTION_HOUSE_NEUTRAL: "neutral",
 }
 
-# Classic Blizzard ids cap around 24283. Turtle custom content typically lives
-# at 50000+. The gap is TBC/WotLK and must not be imported.
+# Classic 1.12 Blizzard ids cap around 24283. Turtle custom items in this
+# repository also occupy 24284-49999 (for example 36616, 42287) and 50000+
+# (for example 55371, 83274). A numeric TBC/WotLK gap filter therefore cannot
+# tell Turtle customs from expansion ids; default is to keep every positive id.
+# --reject-expansion-ids restores the 24284-49999 drop for known WotLK dumps.
 CLASSIC_ITEM_ID_MAX = 24283
-TURTLE_CUSTOM_ITEM_ID_MIN = 50000
+EXPANSION_ITEM_ID_MAX = 49999
 
 SNAPSHOT_TABLES = {
     "ahbot_custom_prices",
@@ -72,46 +77,46 @@ ITEM_KEY_RE = re.compile(r"^(\d+)(?:[:\-](\-?\d+))?$")
 TRUE_VALUES = {"1", "true", "yes", "on", "complete"}
 
 CREATE_PRICE_STATS_SQL = """\
-CREATE TABLE IF NOT EXISTS `ahbot_custom_price_stats` (
-  `item_id` INT UNSIGNED NOT NULL,
-  `suffix_id` INT NOT NULL DEFAULT 0,
-  `auction_house` BIGINT(20) NOT NULL,
-  `sample_count` INT UNSIGNED NOT NULL,
-  `price_min` BIGINT(20) UNSIGNED NOT NULL,
-  `price_p10` BIGINT(20) UNSIGNED NOT NULL,
-  `price_p25` BIGINT(20) UNSIGNED NOT NULL,
-  `price_median` BIGINT(20) UNSIGNED NOT NULL,
-  `price_p75` BIGINT(20) UNSIGNED NOT NULL,
-  `price_p90` BIGINT(20) UNSIGNED NOT NULL,
-  `price_max` BIGINT(20) UNSIGNED NOT NULL,
+CREATE TABLE IF NOT EXISTS `ahbot_price_stats` (
+  `item_id` int(10) unsigned NOT NULL,
+  `suffix_id` int(11) NOT NULL DEFAULT 0,
+  `auction_house` bigint(20) NOT NULL,
+  `sample_count` int(10) unsigned NOT NULL,
+  `price_min` bigint(20) unsigned NOT NULL,
+  `price_p10` bigint(20) unsigned NOT NULL,
+  `price_p25` bigint(20) unsigned NOT NULL,
+  `price_median` bigint(20) unsigned NOT NULL,
+  `price_p75` bigint(20) unsigned NOT NULL,
+  `price_p90` bigint(20) unsigned NOT NULL,
+  `price_max` bigint(20) unsigned NOT NULL,
   PRIMARY KEY (`item_id`, `suffix_id`, `auction_house`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci;
 """
 
 CREATE_LISTING_STATS_SQL = """\
-CREATE TABLE IF NOT EXISTS `ahbot_custom_listing_stats` (
-  `item_id` INT UNSIGNED NOT NULL,
-  `suffix_id` INT NOT NULL DEFAULT 0,
-  `auction_house` BIGINT(20) NOT NULL,
-  `snapshot_count` INT UNSIGNED NOT NULL COMMENT 'Snapshots processed for this auction house',
-  `days_seen` INT UNSIGNED NOT NULL COMMENT 'Distinct calendar days this item appeared',
-  `seen_count` INT UNSIGNED NOT NULL COMMENT 'Distinct snapshots this item appeared in (presence, not listing count)',
-  `listing_count` INT UNSIGNED NOT NULL COMMENT 'Total listing observations across those snapshots',
+CREATE TABLE IF NOT EXISTS `ahbot_listing_stats` (
+  `item_id` int(10) unsigned NOT NULL,
+  `suffix_id` int(11) NOT NULL DEFAULT 0,
+  `auction_house` bigint(20) NOT NULL,
+  `snapshot_count` int(10) unsigned NOT NULL COMMENT 'Snapshots processed for this auction house',
+  `days_seen` int(10) unsigned NOT NULL COMMENT 'Distinct calendar days this item appeared',
+  `seen_count` int(10) unsigned NOT NULL COMMENT 'Distinct snapshots this item appeared in (presence, not listing count)',
+  `listing_count` int(10) unsigned NOT NULL COMMENT 'Total listing observations across those snapshots',
   PRIMARY KEY (`item_id`, `suffix_id`, `auction_house`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci;
 """
 
 CREATE_SOURCE_SQL = """\
 CREATE TABLE IF NOT EXISTS `ahbot_market_snapshot_source` (
-  `source_id` INT UNSIGNED NOT NULL,
-  `source_path` VARCHAR(512) NOT NULL,
-  `server` VARCHAR(64) NOT NULL DEFAULT '',
-  `faction` VARCHAR(16) NOT NULL DEFAULT '',
-  `auction_house` BIGINT(20) NOT NULL,
-  `snapshot_date` DATE DEFAULT NULL,
-  `complete` TINYINT(1) NOT NULL DEFAULT 1,
-  `expected_listings` INT UNSIGNED DEFAULT NULL,
-  `parsed_listings` INT UNSIGNED NOT NULL,
+  `source_id` int(10) unsigned NOT NULL,
+  `source_path` varchar(512) NOT NULL,
+  `server` varchar(64) NOT NULL DEFAULT '',
+  `faction` varchar(16) NOT NULL DEFAULT '',
+  `auction_house` bigint(20) NOT NULL,
+  `snapshot_date` date DEFAULT NULL,
+  `complete` tinyint(1) NOT NULL DEFAULT 1,
+  `expected_listings` int(10) unsigned DEFAULT NULL,
+  `parsed_listings` int(10) unsigned NOT NULL,
   PRIMARY KEY (`source_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci;
 """
@@ -172,12 +177,12 @@ def observed_percentile(sorted_values: list[int], percentile: int) -> int:
     return sorted_values[index]
 
 
-def is_turtle_compatible_item_id(item_id: int, allow_expansion_ids: bool) -> bool:
+def is_turtle_compatible_item_id(item_id: int, reject_expansion_ids: bool) -> bool:
     if item_id <= 0:
         return False
-    if allow_expansion_ids:
+    if not reject_expansion_ids:
         return True
-    return item_id <= CLASSIC_ITEM_ID_MAX or item_id >= TURTLE_CUSTOM_ITEM_ID_MIN
+    return item_id <= CLASSIC_ITEM_ID_MAX or item_id > EXPANSION_ITEM_ID_MAX
 
 
 def normalize_faction(value: str | None) -> str:
@@ -411,7 +416,7 @@ def observation_from_columns(
     auction_house: int,
     source_id: int,
     snapshot_date: date | None,
-    allow_expansion_ids: bool,
+    reject_expansion_ids: bool,
 ) -> Observation | None:
     mapped: dict[str, str] = {}
     if columns:
@@ -464,7 +469,7 @@ def observation_from_columns(
 
     if unit_price is None or unit_price <= 0:
         return None
-    if not is_turtle_compatible_item_id(item_id, allow_expansion_ids):
+    if not is_turtle_compatible_item_id(item_id, reject_expansion_ids):
         return None
 
     return Observation(
@@ -482,7 +487,7 @@ def parse_insert_line(
     auction_house: int,
     source_id: int,
     snapshot_date: date | None,
-    allow_expansion_ids: bool,
+    reject_expansion_ids: bool,
 ) -> tuple[list[Observation], int, int]:
     match = INSERT_HEAD_RE.search(line.strip())
     if not match:
@@ -516,7 +521,7 @@ def parse_insert_line(
                     break
         parsed_item = parse_item_identifier(item_raw) if item_raw else None
         if parsed_item and parsed_item[0] > 0 and not is_turtle_compatible_item_id(
-            parsed_item[0], allow_expansion_ids
+            parsed_item[0], reject_expansion_ids
         ):
             rejected += 1
             continue
@@ -526,7 +531,7 @@ def parse_insert_line(
             auction_house,
             source_id,
             snapshot_date,
-            allow_expansion_ids,
+            reject_expansion_ids,
         )
         if observation is None:
             skipped += 1
@@ -540,7 +545,7 @@ def read_snapshot_file(
     source_id: int,
     defaults: SnapshotMeta,
     allow_incomplete: bool,
-    allow_expansion_ids: bool,
+    reject_expansion_ids: bool,
 ) -> tuple[SourceRecord, list[Observation]]:
     meta = infer_meta_from_path(path, defaults)
     observations: list[Observation] = []
@@ -563,7 +568,7 @@ def read_snapshot_file(
                 faction_to_auction_house(meta.faction),
                 source_id,
                 meta.snapshot_date,
-                allow_expansion_ids,
+                reject_expansion_ids,
             )
             observations.extend(parsed)
             skipped += skip_count
@@ -693,8 +698,8 @@ def write_generated_sql(
     lines.append("")
 
     if truncate:
-        lines.append("TRUNCATE TABLE `ahbot_custom_price_stats`;")
-        lines.append("TRUNCATE TABLE `ahbot_custom_listing_stats`;")
+        lines.append("TRUNCATE TABLE `ahbot_price_stats`;")
+        lines.append("TRUNCATE TABLE `ahbot_listing_stats`;")
         lines.append("TRUNCATE TABLE `ahbot_market_snapshot_source`;")
         lines.append("")
 
@@ -723,7 +728,7 @@ def write_generated_sql(
 
     for row in price_rows:
         lines.append(
-            "INSERT INTO `ahbot_custom_price_stats` "
+            "INSERT INTO `ahbot_price_stats` "
             "(`item_id`, `suffix_id`, `auction_house`, `sample_count`, `price_min`, "
             "`price_p10`, `price_p25`, `price_median`, `price_p75`, `price_p90`, `price_max`) "
             "VALUES "
@@ -744,7 +749,7 @@ def write_generated_sql(
 
     for row in listing_rows:
         lines.append(
-            "INSERT INTO `ahbot_custom_listing_stats` "
+            "INSERT INTO `ahbot_listing_stats` "
             "(`item_id`, `suffix_id`, `auction_house`, `snapshot_count`, `days_seen`, "
             "`seen_count`, `listing_count`) VALUES "
             f"({row[0]}, {row[1]}, {row[2]}, {row[3]}, {row[4]}, {row[5]}, {row[6]}) "
@@ -834,9 +839,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Include snapshots whose completeness metadata fails instead of exiting.",
     )
     parser.add_argument(
+        "--reject-expansion-ids",
+        action="store_true",
+        help=(
+            "Drop item ids in 24284-49999. Off by default because Turtle custom "
+            "items in this repository occupy that range as well as 50000+."
+        ),
+    )
+    parser.add_argument(
         "--allow-expansion-ids",
         action="store_true",
-        help="Do not reject TBC/WotLK-range item ids. Off by default.",
+        help="Deprecated no-op: expansion-range ids are kept unless --reject-expansion-ids is set.",
     )
     parser.add_argument(
         "--no-ahbot-price",
@@ -850,7 +863,7 @@ def build_from_files(
     files: list[Path],
     defaults: SnapshotMeta,
     allow_incomplete: bool,
-    allow_expansion_ids: bool,
+    reject_expansion_ids: bool,
 ) -> tuple[list[SourceRecord], list[Observation]]:
     sources: list[SourceRecord] = []
     observations: list[Observation] = []
@@ -860,7 +873,7 @@ def build_from_files(
             index,
             defaults,
             allow_incomplete,
-            allow_expansion_ids,
+            reject_expansion_ids,
         )
         sources.append(record)
         observations.extend(parsed)
@@ -886,7 +899,7 @@ def main(argv: list[str] | None = None) -> int:
             files,
             defaults,
             args.allow_incomplete,
-            args.allow_expansion_ids,
+            args.reject_expansion_ids,
         )
     except SnapshotError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -46,3 +46,4 @@ CREATE TABLE IF NOT EXISTS `ahbot_house_target` (
   `target_items` int(10) unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`auction_house`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci;
+

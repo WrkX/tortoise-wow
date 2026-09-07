@@ -64,14 +64,22 @@ namespace ahbot
         return static_cast<uint32_t>(scaled);
     }
 
+    inline uint32_t SaturatingMul(uint32_t a, uint32_t b)
+    {
+        uint64_t product = static_cast<uint64_t>(a) * static_cast<uint64_t>(b);
+        if (product > 4294967295ull)
+            return 4294967295u;
+        return static_cast<uint32_t>(product);
+    }
+
     inline uint32_t RollInclusive(uint32_t lo, uint32_t hi, uint32_t roll)
     {
         if (hi < lo)
             std::swap(lo, hi);
-        uint32_t span = hi - lo;
+        uint64_t span = static_cast<uint64_t>(hi) - static_cast<uint64_t>(lo);
         if (span == 0)
             return lo;
-        return lo + (roll % (span + 1));
+        return lo + static_cast<uint32_t>(static_cast<uint64_t>(roll) % (span + 1));
     }
 
     // Daily house target. min=max=0 means "feature off" and returns 0.
@@ -91,7 +99,7 @@ namespace ahbot
         if (targetPercent >= 100)
             return raw;
 
-        uint32_t scaled = (raw * targetPercent + 99) / 100;
+        uint32_t scaled = static_cast<uint32_t>((static_cast<uint64_t>(raw) * targetPercent + 99) / 100);
         if (scaled < 1 && raw > 0)
             scaled = 1;
         return scaled;
@@ -331,7 +339,7 @@ namespace ahbot
         if (ratioPercent <= ratioRoll0to99)
             return 1;
 
-        uint32_t increments = (maxPossible + increment - 1) / increment;
+        uint32_t increments = static_cast<uint32_t>((static_cast<uint64_t>(maxPossible) + increment - 1) / increment);
         if (increments == 0)
             increments = 1;
         uint32_t numStacks = RollInclusive(1, increments, stackChoiceRoll);
@@ -352,13 +360,13 @@ namespace ahbot
 
     inline uint32_t WeightedPick(const std::vector<uint32_t>& weights, uint32_t roll)
     {
-        uint32_t total = 0;
+        uint64_t total = 0;
         for (uint32_t w : weights)
             total += w;
         if (total == 0 || weights.empty())
             return 0;
-        uint32_t pick = roll % total;
-        uint32_t acc = 0;
+        uint64_t pick = static_cast<uint64_t>(roll) % total;
+        uint64_t acc = 0;
         for (size_t i = 0; i < weights.size(); ++i)
         {
             acc += weights[i];
@@ -401,8 +409,8 @@ namespace ahbot
         if (stackCount == 0)
             stackCount = 1;
 
-        uint32_t willingStack = willingPerItem * stackCount;
-        uint32_t percentileStack = percentileCapPerItem * stackCount;
+        uint32_t willingStack = SaturatingMul(willingPerItem, stackCount);
+        uint32_t percentileStack = SaturatingMul(percentileCapPerItem, stackCount);
         uint32_t currentBid = listingBid ? listingBid : listingStartBid;
 
         if (budget > 0 && currentBid > budget && (listingBuyout == 0 || listingBuyout > budget))
@@ -421,6 +429,8 @@ namespace ahbot
         else if (listingBid != 0)
         {
             uint32_t nextBid = listingBid + std::max<uint32_t>(1, listingBid / 20);
+            if (nextBid < listingBid)
+                nextBid = 4294967295u;
             if (nextBid < willingStack)
             {
                 d.bid = true;
@@ -571,6 +581,10 @@ namespace ahbot
             fail("full-ratio first increment");
         if (PerUnitPrice(150, 3) != 50)
             fail("per-unit snapshot price");
+        if (SaturatingMul(3000000000u, 2) != 4294967295u)
+            fail("saturating multiply");
+        if (RollInclusive(0, 4294967295u, 0) != 0)
+            fail("inclusive roll zero span-max low bound");
 
         std::vector<uint32_t> weights = { 0, 10, 0, 30 };
         if (WeightedPick(weights, 0) != 1)
