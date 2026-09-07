@@ -1,5 +1,6 @@
 #include "PlayerbotMgr.h"
 #include "playerbot/playerbot.h"
+#include "ahbot/AhBot.h"
 #include "playerbot/AiContextAugment.h"
 #include "playerbot/PerformanceMonitor.h"
 #include <stdarg.h>
@@ -7545,7 +7546,7 @@ bool ChatHandler::HandleRandomPlayerbotCommand(char* args)
 //Dummy handler until Chat.h can be modified.
 bool ChatHandler::HandleAhBotCommand(char* args)
 {
-    return false;
+    return ahbot::AhBot::HandleAhBotCommand(this, args ? args : "");
 }
 
 float PlayerbotAI::GetRange(std::string type)

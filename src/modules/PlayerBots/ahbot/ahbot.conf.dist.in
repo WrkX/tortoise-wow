@@ -3,7 +3,7 @@
 ################################################
 
 [AhbotConf]
-ConfVersion=2019051400
+ConfVersion=2026090700
 
 ###################################################################################################################
 # AUCTION HOUSE BOT SETTINGS
@@ -189,3 +189,186 @@ AhBot.MaxAuctionCount.trade.enchanting.white = 40
 AhBot.MaxAuctionCount.trade.enchanting.green = 20
 AhBot.MaxAuctionCount.trade.enchanting.blue = 20
 
+###################################################################################################################
+# REALISM CONTROLS (defaults preserve the existing Enabled=1 sell+buy behaviour)
+#
+# New knobs default off / zero unless leaving them off would change what an
+# existing ahbot.conf already does. AhBot.Enabled remains the master switch.
+#
+# Administration (console or .ahbot):
+#   reload   - re-read ahbot.conf
+#   status   - seller/buyer flags, house counts vs daily targets, cache sizes
+#   update   - force one check cycle
+#   simulate / dryrun - same cycle without posting, buying, or DB writes
+#   stats    - per-house listing counts
+#   expire   - mark bot auctions expired
+#   dump     - log sell/buy prices for the available pool
+#   <itemId> - explain sell/buy/market price for one item
+#
+# Validation: the pricing/persona/target math lives in AhBotEconomy.h. Compile
+# and run the standalone check with:
+#   g++ -std=c++17 -I src/modules/PlayerBots/ahbot \
+#       src/modules/PlayerBots/ahbot/t/ahbot_economy_test.cpp \
+#       -o /tmp/ahbot_economy_test && /tmp/ahbot_economy_test
+###################################################################################################################
+
+# Split seller / buyer. Both default on so a pre-realism conf keeps posting
+# and answering when AhBot.Enabled = 1.
+AhBot.Seller.Enabled = 1
+AhBot.Buyer.Enabled = 1
+
+# Extra log lines for targets, caps, personas, and buyer skips.
+AhBot.DEBUG = 0
+
+###################################################################################################################
+# PER-HOUSE POPULATION
+#
+# When MinItems and MaxItems are both 0 (default), the existing per-category
+# MaxAuctionCount caps are the only population control.
+# When set, each house rolls a daily target in [Min,Max], scaled by
+# TargetPercent, persisted in characters.ahbot_house_target, and listings are
+# added gradually (ItemsPerCycle per check) until that target is reached.
+# Category MaxAuctionCount still applies on top.
+###################################################################################################################
+
+AhBot.ItemsPerCycle = 0
+AhBot.Alliance.MinItems = 0
+AhBot.Alliance.MaxItems = 0
+AhBot.Alliance.TargetPercent = 100
+AhBot.Horde.MinItems = 0
+AhBot.Horde.MaxItems = 0
+AhBot.Horde.TargetPercent = 100
+AhBot.Neutral.MinItems = 0
+AhBot.Neutral.MaxItems = 0
+AhBot.Neutral.TargetPercent = 100
+
+# Optional listing duration override in seconds. 0/0 keeps the existing 8-24h
+# random duration. Do not set Min below 900 or Max above 172800 if you enable it.
+AhBot.ListingExpireTimeInSecondsMin = 0
+AhBot.ListingExpireTimeInSecondsMax = 0
+
+###################################################################################################################
+# CATEGORY-QUALITY PROPORTIONS
+#
+# Optional extra weights used when picking the next category to restock.
+# 0 (default) means the existing sequential category walk. Set positive
+# values on QualityCategoryWrapper names (e.g. equip.white, trade.tailoring.green)
+# to weight those buckets. Unlisted categories keep weight 0 and are skipped
+# by the weighted picker, so leave this unused unless you configure a full set.
+###################################################################################################################
+
+# AhBot.ListProportion.equip.white = 20
+# AhBot.ListProportion.equip.green = 10
+# AhBot.ListProportion.trade.herbalism.white = 40
+# AhBot.ListProportion.consumables.food.white = 15
+
+###################################################################################################################
+# STACK RULES
+#
+# Off by default. Existing Category::GetStackCount (rarity-based) remains in
+# force until AhBot.Stack.RulesEnabled = 1. RandomRatio is the percent chance
+# of posting more than one; Increment and Max are per item class key:
+# consumable, container, weapon, armor, reagent, projectile, trade, recipe,
+# quiver, quest, misc.
+###################################################################################################################
+
+AhBot.Stack.RulesEnabled = 0
+# AhBot.Stack.RandomRatio.consumable = 40
+# AhBot.Stack.Increment.consumable = 5
+# AhBot.Stack.Max.consumable = 20
+# AhBot.Stack.RandomRatio.trade = 80
+# AhBot.Stack.Increment.trade = 5
+# AhBot.Stack.Max.trade = 20
+# AhBot.Stack.RandomRatio.projectile = 100
+# AhBot.Stack.Increment.projectile = 200
+# AhBot.Stack.Max.projectile = 200
+
+###################################################################################################################
+# PER-ITEM ACTIVE CAPS AND DYNAMIC SUPPLY GAPS
+#
+# MaxActive limits how many bot listings of the same item_template may exist
+# on one house. DynamicSupply rolls EmptyMarketChance (0-100) and skips the
+# item for this attempt, leaving occasional holes. Both default off.
+# Category keys are QualityCategoryWrapper names, same as MaxAuctionCount.
+###################################################################################################################
+
+AhBot.MaxActive.Enabled = 0
+AhBot.MaxActive.Default = 2
+# AhBot.MaxActive.recipe = 1
+# AhBot.MaxActive.equip.blue = 1
+# AhBot.MaxActive.trade.herbalism.white = 20
+
+AhBot.DynamicSupply.Enabled = 0
+AhBot.DynamicSupply.DEBUG = 0
+# AhBot.DynamicSupply.EmptyMarketChance.recipe = 50
+# AhBot.DynamicSupply.EmptyMarketChance.equip.epic = 40
+# AhBot.DynamicSupply.EmptyMarketChance.trade = 5
+
+###################################################################################################################
+# PERCENTILE PRICE STATS
+#
+# Loaded from characters.ahbot_price_stats (empty schema until the Aux importer
+# fills Vanilla rows keyed by item_id, suffix_id, auction_house). If a row is
+# missing or sample_count is below MinSampleCount, the existing formula/market
+# path is used. Do not import WotLK-only dumps; Turtle custom ids occupy both
+# 24284-49999 and 50000+.
+###################################################################################################################
+
+AhBot.CustomPriceStats.Enabled = 0
+AhBot.CustomPriceStats.MinSampleCount = 3
+AhBot.CustomPriceStats.Buyer.MaxAcceptedPercentile = 90
+
+# Optional scarcity weights from characters.ahbot_listing_stats. Off by default.
+AhBot.ListingStats.Enabled = 0
+AhBot.ListingStats.MinSeenCount = 2
+AhBot.ListingStats.FallbackWeight = 1
+AhBot.ListingStats.ScarcityExponent = 1.25
+
+###################################################################################################################
+# VENDOR FLOOR AND MAX PRICE
+#
+# VendorFloor is off by default so existing formula prices do not jump.
+# When enabled, buyout below item_template.SellPrice is raised by AddPercent.
+# MaxBuyoutPriceInCopper 0 means no extra cap.
+###################################################################################################################
+
+AhBot.VendorFloor.Enabled = 0
+AhBot.VendorFloor.AddPercent = 0.25
+AhBot.MaxBuyoutPriceInCopper = 0
+# Fractions of the calculated unit price (0.15 means 15%). Leave both buyout
+# values at 0 to retain the legacy 0..33% upward variation.
+AhBot.BuyoutVariationReducePercent = 0
+AhBot.BuyoutVariationAddPercent = 0
+AhBot.BidVariationHighReducePercent = 0
+AhBot.BidVariationLowReducePercent = 0
+
+###################################################################################################################
+# SELLER PERSONAS / UNDERCUTTING
+#
+# Off by default. When enabled, the first 10 distinct bot seller GUIDs (sorted)
+# are assigned a stable 4 undercutters / 4 greedies / 2 stock-clearers profile.
+# Undercutting uses per-unit buyout from the auction snapshot (itemCount on
+# AuctionSnapshot), never a live AuctionEntry*.
+###################################################################################################################
+
+AhBot.Seller.Personas.Enabled = 0
+AhBot.Seller.UndercuttingEnabled = 0
+AhBot.Seller.UndercutPercentMin = 1
+AhBot.Seller.UndercutPercentMax = 5
+AhBot.Seller.PriceFloorStatsMultiplier = 0.65
+
+###################################################################################################################
+# BUYER CANDIDATES, BUDGETS, VENDOR PROTECTION
+#
+# CandidatesPerCycle 0 (default) keeps the existing full-scan Answer() path.
+# A number or min:max bounds the random candidate sample. House money from
+# GetAvailableMoney remains the budget. PreventOverpayingForVendorItems skips
+# unlimited-vendor items listed above vendor BuyPrice. TryEquipItem upgrade
+# behaviour on successful bot buys is unchanged.
+###################################################################################################################
+
+AhBot.Buyer.CandidatesPerCycle = 0
+AhBot.Buyer.AcceptablePriceModifier = 1.0
+AhBot.Buyer.AlwaysBidMax = 0
+AhBot.Buyer.PreventOverpayingForVendorItems = 0
+AhBot.Buyer.WillBidAgainstPlayers = 1

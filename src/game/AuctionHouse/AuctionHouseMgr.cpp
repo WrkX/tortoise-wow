@@ -146,6 +146,7 @@ std::vector<AuctionSnapshot> AuctionHouseObject::GetAuctionsSnapshot() const
         s.bidder        = e->bidder;
         s.houseId       = e->auctionHouseEntry ? e->auctionHouseEntry->houseId : 0;
         s.itemCount     = e->itemCount;
+        s.itemRandomPropertyId = e->itemRandomPropertyId;
         s.expireTime    = e->expireTime;
         out.push_back(s);
     }
