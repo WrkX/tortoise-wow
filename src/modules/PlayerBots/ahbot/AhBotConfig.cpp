@@ -96,6 +96,7 @@ bool AhBotConfig::Initialize()
     stackReducePrice = config.GetIntDefault("AhBot.StackReducePrice", 1000000);
     priceQualityMultiplier = config.GetFloatDefault("AhBot.PriceQualityMultiplier", 1.0f);
     underPriceProbability = config.GetFloatDefault("AhBot.UnderPriceProbability", 0.05f);
+    underPriceProbability = std::max(0.0f, std::min(1.0f, underPriceProbability));
     LoadSet<std::set<uint32> >(config.GetStringDefault("AhBot.IgnoreItemIds", "49283,52200,8494,6345,6891,2460,37164,34835,17,2248"), ignoreItemIds);
     LoadSet<std::set<uint32> >(config.GetStringDefault("AhBot.IgnoreVendorItemIds", "755,858,4592,4593,1710,3827,2455,3385"), ignoreVendorItemIds);
     sendmail = config.GetBoolDefault("AhBot.SendMail", true);
@@ -146,6 +147,10 @@ bool AhBotConfig::Initialize()
     buyoutVariationAddPercent = config.GetFloatDefault("AhBot.BuyoutVariationAddPercent", 0.0f);
     bidVariationHighReducePercent = config.GetFloatDefault("AhBot.BidVariationHighReducePercent", 0.0f);
     bidVariationLowReducePercent = config.GetFloatDefault("AhBot.BidVariationLowReducePercent", 0.0f);
+    buyoutVariationReducePercent = std::max(0.0f, std::min(1.0f, buyoutVariationReducePercent));
+    buyoutVariationAddPercent = std::max(0.0f, buyoutVariationAddPercent);
+    bidVariationHighReducePercent = std::max(0.0f, std::min(1.0f, bidVariationHighReducePercent));
+    bidVariationLowReducePercent = std::max(0.0f, std::min(1.0f, bidVariationLowReducePercent));
     vendorFloorEnabled = config.GetBoolDefault("AhBot.VendorFloor.Enabled", false);
     vendorFloorAddPercent = config.GetFloatDefault("AhBot.VendorFloor.AddPercent", 0.25f);
     stackRulesEnabled = config.GetBoolDefault("AhBot.Stack.RulesEnabled", false);

@@ -16,7 +16,6 @@ CREATE TABLE `ahbot_history` (
   KEY `category` (`category`),
   KEY `auction_house` (`auction_house`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci;
-
 CREATE TABLE `ahbot_category` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
   `category` varchar(45) DEFAULT NULL,
@@ -46,4 +45,3 @@ CREATE TABLE IF NOT EXISTS `ahbot_house_target` (
   `target_items` int(10) unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`auction_house`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8mb3_general_ci;
-

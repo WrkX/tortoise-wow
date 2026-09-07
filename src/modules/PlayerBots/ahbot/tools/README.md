@@ -81,6 +81,10 @@ Header (optional, validated when present):
 If `complete=0` or `expected_listings` does not match the number of accepted
 rows, the build exits unless you pass `--allow-incomplete`.
 
+The builder also refuses files with an unknown faction or zero parsed listings,
+because the default refresh truncates the existing stats. To represent a
+genuinely empty auction-house scan, declare `expected_listings=0` explicitly.
+
 Turtle listing rows (per-unit copper). `buyout` + `quantity` is accepted and
 converted with integer division:
 

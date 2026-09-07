@@ -53,7 +53,9 @@ namespace ahbot
         std::map<std::string, uint32> historyTimes;
         std::map<uint64, uint32> answerCounts;
         std::map<std::string, uint32> categoryDayCounts;
+        std::map<std::string, uint32> buyerCategoryDayCounts;
         std::map<uint64, uint32> itemDayCounts;
+        std::map<uint64, uint32> buyerItemDayCounts;
         std::map<uint32, uint32> vendorBuyPrice;
         std::map<ItemStatKey, PricePercentiles> priceStats;
         std::map<ItemStatKey, uint32> listingSeen;
@@ -107,15 +109,15 @@ namespace ahbot
 
         bool TryGetCachedMarketPrice(uint32 itemId, uint32 auctionHouse, double& outPrice);
         bool HasCycleCache();
-        uint32 GetCachedCategoryDayCount(const std::string& category, uint32 faction);
-        uint32 GetCachedItemDayCount(uint32 itemId, uint32 faction);
+        uint32 GetCachedCategoryDayCount(const std::string& category, uint32 faction, bool buyer);
+        uint32 GetCachedItemDayCount(uint32 itemId, uint32 faction, bool buyer);
         bool TryGetPriceStats(uint32 itemId, uint32 auctionHouse, PricePercentiles& outStats, int32 suffixId = 0);
         uint32 GetVendorBuyPrice(uint32 itemId);
         bool IsDryRun() const { return dryRun; }
 
     private:
         int Answer(int auction, Category* category, ItemBag* inAuctionItems, const HouseSnapshotIndex& index);
-        int AddAuctions(int auction, Category* category, ItemBag* inAuctionItems, const HouseSnapshotIndex& index, int& remainingCycle);
+        int AddAuctions(int auction, Category* category, ItemBag* inAuctionItems, HouseSnapshotIndex& index, int& remainingCycle);
         int AddAuction(int auction, Category* category, const ItemPrototype* proto, const HouseSnapshotIndex& index);
         void Expire(int auction);
         void PrintStats(int auction, ChatHandler* handler);
@@ -176,10 +178,13 @@ namespace ahbot
         struct PendingPurchase
         {
             uint32 auctionId;
+            uint32 itemGuidLow;
             uint32 bidder;
             uint32 bidAmount;
-            uint32 unitPrice;       // for the buyout heuristic
             uint32 minBuyout;       // cheapest comparable listing, 0 if none
+            uint32 expectedBidder;
+            uint32 expectedBid;
+            uint32 expectedBuyout;
             int    houseIndex;      // index into auctionIds[]
         };
 

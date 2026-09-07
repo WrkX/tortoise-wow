@@ -38,7 +38,7 @@ double PricingStrategy::CalculatePrice(std::ostringstream *explain, ...)
 
 uint32 PricingStrategy::GetSellPrice(ItemPrototype const* proto, uint32 auctionHouse, bool ignoreMarket, std::ostringstream *explain)
 {
-    if (sAhBotConfig.customPriceStatsEnabled)
+    if (!ignoreMarket && sAhBotConfig.customPriceStatsEnabled)
     {
         PricePercentiles stats;
         if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))
@@ -175,7 +175,8 @@ double PricingStrategy::GetCategoryPriceMultiplier(uint32 untilTime, uint32 auct
     uint32 faction = AhBot::factions[auctionHouse];
     if (auctionbot.HasCycleCache())
     {
-        uint32 count = auctionbot.GetCachedCategoryDayCount(category->GetName(), faction);
+        bool buyer = untilTime + 6 * 3600 < (uint32)time(0);
+        uint32 count = auctionbot.GetCachedCategoryDayCount(category->GetName(), faction, buyer);
         return count ? 1.0 + count : 1.0;
     }
 
@@ -208,7 +209,10 @@ double PricingStrategy::GetItemPriceMultiplier(ItemPrototype const* proto, uint3
 {
     uint32 faction = AhBot::factions[auctionHouse];
     if (auctionbot.HasCycleCache())
-        return 1.0 + auctionbot.GetCachedItemDayCount(proto->ItemId, faction);
+    {
+        bool buyer = untilTime + 6 * 3600 < (uint32)time(0);
+        return 1.0 + auctionbot.GetCachedItemDayCount(proto->ItemId, faction, buyer);
+    }
 
     double result = 1.0;
 

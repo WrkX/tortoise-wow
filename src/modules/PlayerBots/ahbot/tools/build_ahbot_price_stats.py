@@ -575,6 +575,23 @@ def read_snapshot_file(
             rejected += reject_count
 
     complete = True if meta.complete is None else meta.complete
+    auction_house = faction_to_auction_house(meta.faction)
+    if auction_house == 0:
+        raise SnapshotError(
+            f"{path}: faction is missing; add AHBOT_SNAPSHOT metadata, a faction "
+            "directory/name, or --default-faction"
+        )
+    if any(observation.auction_house != auction_house for observation in observations):
+        raise SnapshotError(
+            f"{path}: faction metadata must appear before listing rows"
+        )
+    if not observations and meta.expected_listings != 0:
+        complete = False
+        message = f"{path}: parsed no listings; refusing an empty refresh"
+        if not allow_incomplete:
+            raise SnapshotError(message)
+        print(f"warning: {message}", file=sys.stderr)
+
     if meta.expected_listings is not None and meta.expected_listings != len(observations):
         complete = False
         message = (
@@ -597,7 +614,7 @@ def read_snapshot_file(
         source_path=display_path,
         server=meta.server,
         faction=meta.faction,
-        auction_house=faction_to_auction_house(meta.faction),
+        auction_house=auction_house,
         snapshot_date=meta.snapshot_date,
         complete=complete,
         expected_listings=meta.expected_listings,

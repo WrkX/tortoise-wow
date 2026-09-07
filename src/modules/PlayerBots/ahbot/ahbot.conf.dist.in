@@ -335,6 +335,8 @@ AhBot.ListingStats.ScarcityExponent = 1.25
 AhBot.VendorFloor.Enabled = 0
 AhBot.VendorFloor.AddPercent = 0.25
 AhBot.MaxBuyoutPriceInCopper = 0
+# Fractions of the calculated unit price (0.15 means 15%). Leave both buyout
+# values at 0 to retain the legacy 0..33% upward variation.
 AhBot.BuyoutVariationReducePercent = 0
 AhBot.BuyoutVariationAddPercent = 0
 AhBot.BidVariationHighReducePercent = 0
@@ -370,5 +372,3 @@ AhBot.Buyer.AcceptablePriceModifier = 1.0
 AhBot.Buyer.AlwaysBidMax = 0
 AhBot.Buyer.PreventOverpayingForVendorItems = 0
 AhBot.Buyer.WillBidAgainstPlayers = 1
-
-

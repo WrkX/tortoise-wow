@@ -72,6 +72,12 @@ namespace ahbot
         return static_cast<uint32_t>(product);
     }
 
+    inline uint32_t SaturatingAdd(uint32_t a, uint32_t b)
+    {
+        uint64_t sum = static_cast<uint64_t>(a) + static_cast<uint64_t>(b);
+        return sum > 4294967295ull ? 4294967295u : static_cast<uint32_t>(sum);
+    }
+
     inline uint32_t RollInclusive(uint32_t lo, uint32_t hi, uint32_t roll)
     {
         if (hi < lo)
@@ -322,6 +328,17 @@ namespace ahbot
         return bid;
     }
 
+    inline uint32_t VaryPrice(uint32_t price, float reducePercent, float addPercent, uint32_t roll)
+    {
+        reducePercent = std::max(0.0f, std::min(1.0f, reducePercent));
+        addPercent = std::max(0.0f, addPercent);
+        uint32_t low = ScaleU32(price, 1.0f - reducePercent);
+        uint32_t high = ScaleU32(price, 1.0f + addPercent);
+        if (price && low == 0)
+            low = 1;
+        return RollInclusive(low, high, roll);
+    }
+
     // ratioPercent: chance 0-100 of posting a stack > 1. 0 keeps a stack of 1
     // (legacy "feature off" when combined with the caller using Category::GetStackCount).
     inline uint32_t ChooseStackCount(uint32_t itemMaxStack, uint32_t ratioPercent, uint32_t increment, uint32_t configMax,
@@ -411,6 +428,7 @@ namespace ahbot
 
         uint32_t willingStack = SaturatingMul(willingPerItem, stackCount);
         uint32_t percentileStack = SaturatingMul(percentileCapPerItem, stackCount);
+        uint32_t vendorStack = SaturatingMul(vendorCap, stackCount);
         uint32_t currentBid = listingBid ? listingBid : listingStartBid;
 
         if (budget > 0 && currentBid > budget && (listingBuyout == 0 || listingBuyout > budget))
@@ -452,14 +470,14 @@ namespace ahbot
             }
         }
 
-        if (vendorCap > 0)
+        if (vendorStack > 0)
         {
-            if (d.buyout && listingBuyout > vendorCap)
+            if (d.buyout && listingBuyout > vendorStack)
             {
                 d.buyout = false;
                 d.blockedByVendor = true;
             }
-            if (d.bid && d.bidAmount > vendorCap)
+            if (d.bid && d.bidAmount > vendorStack)
             {
                 d.bid = false;
                 d.blockedByVendor = true;
@@ -549,6 +567,9 @@ namespace ahbot
             fail("vendor floor off");
         if (ApplyVendorFloorAndMax(5000, 1, false, 0.0f, 1000) != 1000)
             fail("max price clamp");
+        uint32_t variedLow = VaryPrice(1000, 0.10f, 0.20f, 0);
+        if (variedLow < 899 || variedLow > 900)
+            fail("buyout variation low bound");
 
         uint32_t floor = SellerPriceFloor(80, &stats, 3, 0.65f);
         if (floor < 80)
@@ -583,6 +604,8 @@ namespace ahbot
             fail("per-unit snapshot price");
         if (SaturatingMul(3000000000u, 2) != 4294967295u)
             fail("saturating multiply");
+        if (SaturatingAdd(4294967290u, 10) != 4294967295u)
+            fail("saturating add");
         if (RollInclusive(0, 4294967295u, 0) != 0)
             fail("inclusive roll zero span-max low bound");
 
@@ -604,6 +627,9 @@ namespace ahbot
         BuyerDecision vendor = DecideBuyerOffer(100, 0, 120, 1, 200, 0, 50, 1000, false);
         if (vendor.buyout || !vendor.blockedByVendor)
             fail("vendor protection");
+        BuyerDecision vendorStack = DecideBuyerOffer(100, 0, 180, 2, 100, 0, 100, 1000, false);
+        if (!vendorStack.buyout || vendorStack.blockedByVendor)
+            fail("vendor protection must scale with stack size");
         BuyerDecision cap = DecideBuyerOffer(100, 0, 120, 1, 200, 50, 0, 1000, false);
         if (cap.buyout || !cap.blockedByPercentile)
             fail("percentile cap");
