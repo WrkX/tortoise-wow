@@ -1,5 +1,8 @@
 # AHBot market stats from daily Aux snapshots
 
+For a short, implementation-neutral handoff to another agent, see
+[`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+
 Builds percentile and availability SQL for Turtle WoW (Vanilla) auction houses
 from daily Aux-derived dumps. Apply the generated file to the **characters**
 database (`tw_char`). The C++ AhBot runtime reads the same tables from
