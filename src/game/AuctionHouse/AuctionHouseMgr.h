@@ -143,6 +143,7 @@ struct AuctionSnapshot
     uint32 bidder;
     uint32 houseId;
     uint32 itemCount;
+    int32 itemRandomPropertyId;
     time_t expireTime;
 };
 

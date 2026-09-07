@@ -124,11 +124,6 @@ void AhBot::StartWorker()
     });
 }
 
-void activateAhbotThread()
-{
-    auctionbot.StartWorker();
-}
-
 void AhBot::Update()
 {
     if (sWorld.IsShutdowning())
@@ -155,14 +150,14 @@ void AhBot::Update()
 
     sLog.outString("[AhBot] Scheduling auction check (next after this: in %d seconds)", sAhBotConfig.updateInterval);
     nextAICheckTime = time(0) + sAhBotConfig.updateInterval;
-    activateAhbotThread();
+    StartWorker();
     CleanupPropositions();
 }
 
 void AhBot::RequestUpdate(bool simulate)
 {
     pendingSimulate.store(simulate);
-    activateAhbotThread();
+    StartWorker();
 }
 
 void AhBot::ForceUpdate(bool simulate)
@@ -2305,7 +2300,7 @@ bool AhBot::TryGetPriceStats(uint32 itemId, uint32 auctionHouse, PricePercentile
     return true;
 }
 
-AhBot::ItemStatKey AhBot::MakeStatKey(uint32 itemId, int32 suffixId, uint32 auctionHouse)
+ItemStatKey AhBot::MakeStatKey(uint32 itemId, int32 suffixId, uint32 auctionHouse)
 {
     ItemStatKey key;
     key.itemId = itemId;
