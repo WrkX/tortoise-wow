@@ -1,3 +1,6 @@
 [submodule "src/modules/Eluna"]
 	path = src/modules/Eluna
 	url = https://github.com/ElunaLuaEngine/Eluna.git
+[submodule "modules/mod-reagent-bank"]
+	path = modules/mod-reagent-bank
+	url = /home/jonas/dev/mod-reagent-bank
