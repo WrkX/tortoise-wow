@@ -1,7 +1,6 @@
 #pragma once
 
 #include "playerbot/ServerFacade.h"
-#include "playerbot/PlayerbotAiExtension.h"
 #include "playerbot/strategy/Action.h"
 #include "MovementActions.h"
 #include "playerbot/strategy/values/LastMovementValue.h"
@@ -62,13 +61,6 @@ namespace ai
 
         virtual bool Execute(Event& event) override
         {
-            // isUseful() normally enforces this before the dead engine queues
-            // the action. Keep the guard in Execute as well: DungeonClear's
-            // recovery action and other direct callers must not bypass the
-            // active run's no-release policy.
-            if (sPlayerbotAiExtension.ShouldPreventAutoRelease(bot))
-                return false;
-
             sLog.outDetail("Bot #%d %s:%d <%s> auto released", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName());
 
             WorldPacket packet(CMSG_REPOP_REQUEST);
@@ -104,9 +96,6 @@ namespace ai
                 return !bot->GetCorpse() || !bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST);
 
             if (bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-                return false;
-
-            if (sPlayerbotAiExtension.ShouldPreventAutoRelease(bot))
                 return false;
 
             if (!bot->GetGroup())

@@ -127,7 +127,7 @@ namespace ai
         virtual void AddShared(NamedObjectContext<Action>* shared) { actionContexts.AddFront(shared); }
         virtual void AddShared(NamedObjectContext<Trigger>* shared) { triggerContexts.AddFront(shared); }
 
-        // Used by optional modules (DungeonClear) via PlayerbotAiExtension.
+        // Used by optional modules that augment bot contexts.
         void AddStrategyContext(NamedObjectContext<Strategy>* ctx) { if (ctx) strategyContexts.Add(ctx); }
         void AddActionContext(NamedObjectContext<Action>* ctx) { if (ctx) actionContexts.Add(ctx); }
         void AddTriggerContext(NamedObjectContext<Trigger>* ctx) { if (ctx) triggerContexts.Add(ctx); }
