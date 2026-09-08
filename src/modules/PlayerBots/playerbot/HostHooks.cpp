@@ -7,7 +7,6 @@
 #include "World.h"
 #include "playerbot/RandomPlayerbotMgr.h"
 #include "playerbot/PlayerbotAIConfig.h"
-#include "playerbot/PlayerbotAiExtension.h"
 #include "Chat/Chat.h"
 
 void CreateBotAI(Player* player)
@@ -64,14 +63,13 @@ void AddSC_playerbot_hooks();
 void World::InitPlayerbotsAtStartup()
 {
     sPlayerbotAIConfig.Initialize();
-    sPlayerbotAiExtension.RunStartupHooks();
-
     // Register after ScriptRegistry's containers exist. Subsequent bot/core
     // integration is delivered through PlayerbotScripts.cpp hooks.
     AddSC_playerbot_hooks();
 }
 
-bool ChatHandler::HandleDungeonClearCommand(char* args)
+bool ChatHandler::HandleDungeonClearCommand(char*)
 {
-    return sPlayerbotAiExtension.HandleDcCommand(this, args);
+    SendSysMessage("DungeonClear module command unavailable.");
+    return true;
 }

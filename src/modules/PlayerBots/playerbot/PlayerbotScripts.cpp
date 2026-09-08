@@ -23,7 +23,6 @@
 #include "playerbot/RandomPlayerbotMgr.h"
 #include "playerbot/RandomPlayerbotFactory.h"
 #include "playerbot/PlayerbotAIConfig.h"
-#include "playerbot/PlayerbotAiExtension.h"
 #include "playerbot/AiFactory.h"
 #include "playerbot/strategy/actions/ChangeTalentsAction.h"
 #include "ahbot/AhBot.h"
@@ -53,7 +52,6 @@ class PlayerbotWorldScript : public WorldScript
                 return;
             sRandomPlayerbotMgr.UpdateAI(diff);
             auctionbot.Update();
-            sPlayerbotAiExtension.RunWorldUpdate(diff);
         }
 };
 
@@ -193,10 +191,6 @@ class PlayerbotPlayerScript : public PlayerScript
                            uint32 lang, std::string const& to) override
         {
             if (!master || !sPlayerbotAIConfig.enabled)
-                return;
-
-            if ((lang == LANG_ADDON || type == CHAT_MSG_ADDON) &&
-                sPlayerbotAiExtension.HandleAddonMessage(master, msg))
                 return;
 
             if (PlayerbotMgr* mgr = GetBotMgr(master))
