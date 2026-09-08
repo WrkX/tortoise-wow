@@ -4,3 +4,4 @@
 [submodule "modules/mod-reagent-bank"]
 	path = modules/mod-reagent-bank
 	url = https://github.com/WrkX/mod-reagent-bank.git
+	branch = main

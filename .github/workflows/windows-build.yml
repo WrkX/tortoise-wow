@@ -27,6 +27,32 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Record pinned Reagent Bank module revision
+        shell: pwsh
+        run: |
+          $commit = git -C modules/mod-reagent-bank rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw "could not resolve pinned mod-reagent-bank commit" }
+          "REAGENT_BANK_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Using pinned mod-reagent-bank $commit"
+
+      # Pulling a moving module revision is intentionally limited to the main
+      # push that feeds Windows Release. PR and manual builds retain the
+      # superproject's gitlink pin for reproducibility.
+      - name: Use latest Reagent Bank module for release artifacts
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          if ($LASTEXITCODE -ne 0) { throw "submodule sync failed" }
+          git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw "submodule initialization failed" }
+          git submodule update --remote --checkout modules/mod-reagent-bank
+          if ($LASTEXITCODE -ne 0) { throw "failed to update mod-reagent-bank from origin/main" }
+          $commit = git -C modules/mod-reagent-bank rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw "could not resolve mod-reagent-bank commit" }
+          "REAGENT_BANK_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Building release artifact with mod-reagent-bank $commit"
+
       - name: Archive name
         shell: pwsh
         run: |
@@ -75,6 +101,7 @@ jobs:
             "commit=$env:GITHUB_SHA"
             "short=$env:GITHUB_SHORT_SHA"
             "ref=$env:GITHUB_REF"
+            "mod_reagent_bank_commit=$env:REAGENT_BANK_COMMIT"
           ) | Set-Content (Join-Path $sqlRoot 'BUILD_INFO.txt')
 
           $zip = Join-Path $root "$env:SQL_ARCHIVE_NAME.zip"
@@ -170,6 +197,7 @@ jobs:
             "commit=$env:GITHUB_SHA"
             "short=$env:GITHUB_SHORT_SHA"
             "ref=$env:GITHUB_REF"
+            "mod_reagent_bank_commit=$env:REAGENT_BANK_COMMIT"
           ) | Set-Content (Join-Path $dest 'BUILD_INFO.txt')
 
       - name: Zip
