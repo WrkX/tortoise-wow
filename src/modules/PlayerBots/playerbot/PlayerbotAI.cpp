@@ -6,7 +6,6 @@
 #include <iomanip>
 
 #include "playerbot/AiFactory.h"
-#include "playerbot/PlayerbotAiExtension.h"
 
 #include "Movement/MovementGenerator.h"
 #include "Maps/GridNotifiers.h"
@@ -1458,7 +1457,6 @@ void PlayerbotAI::OnDeath()
         if (bot->GetCorpse() && bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
             ChangeEngine(BotState::BOT_STATE_DEAD);
-            sPlayerbotAiExtension.RunStrategyGates(this, bot);
             return;
         }
 
@@ -1545,7 +1543,6 @@ void PlayerbotAI::OnDeath()
         SET_AI_VALUE2(bool, "manual bool", "enemies near corpse", false);
         SET_AI_VALUE2(bool, "manual bool", "enemies near graveyard", false);
         ChangeEngine(BotState::BOT_STATE_DEAD);
-        sPlayerbotAiExtension.RunStrategyGates(this, bot);
     }
 }
 
@@ -1561,7 +1558,6 @@ void PlayerbotAI::OnResurrected()
         }
 
         ChangeEngine(BotState::BOT_STATE_NON_COMBAT);
-        sPlayerbotAiExtension.RunStrategyGates(this, bot);
     }
 }
 
@@ -3063,10 +3059,6 @@ void PlayerbotAI::ResetStrategies(bool autoLoad)
     if (bot->IsInWorld())
         ApplyInstanceStrategies(bot->GetMapId());
 
-    // Optional modules (DungeonClear) re-assert dungeon-gated strategies after
-    // every rebuild — ResetStrategies wipes the engine and would otherwise drop
-    // mid-run triggers until the next map change.
-    sPlayerbotAiExtension.RunStrategyGates(this, bot);
 }
 
 bool PlayerbotAI::IsRanged(Player* player, bool inGroup)
@@ -3242,7 +3234,6 @@ void PlayerbotAI::ApplyInstanceStrategies(uint32 mapId, bool /*tellMaster*/)
     if (mapId == 409)
         ChangeStrategy("+molten core", BotState::BOT_STATE_ALL);
 
-    sPlayerbotAiExtension.RunStrategyGates(this, bot);
 }
 
 namespace MaNGOS
