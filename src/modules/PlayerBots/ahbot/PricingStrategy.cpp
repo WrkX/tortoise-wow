@@ -3,6 +3,7 @@
 #include "Category.h"
 #include "ItemBag.h"
 #include "AhBotConfig.h"
+#include "AhBotEconomy.h"
 #include "Database/DatabaseEnv.h"
 #include "playerbot/RandomItemMgr.h"
 #include "ahbot/AhBot.h"
@@ -37,12 +38,30 @@ double PricingStrategy::CalculatePrice(std::ostringstream *explain, ...)
 
 uint32 PricingStrategy::GetSellPrice(ItemPrototype const* proto, uint32 auctionHouse, bool ignoreMarket, std::ostringstream *explain)
 {
+    if (!ignoreMarket && sAhBotConfig.customPriceStatsEnabled)
+    {
+        PricePercentiles stats;
+        if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))
+        {
+            uint32 rolled = RollPercentilePrice(stats, sAhBotConfig.customPriceStatsMinSampleCount, false,
+                explain ? 50 : urand(1, 100), explain ? 0 : urand(0, 0x7fffffff));
+            if (rolled)
+            {
+                if (explain) *explain << "percentile-stats";
+                rolled = ApplyVendorFloorAndMax(rolled, proto->SellPrice, sAhBotConfig.vendorFloorEnabled,
+                    sAhBotConfig.vendorFloorAddPercent, sAhBotConfig.maxBuyoutPrice);
+                return RoundPrice(rolled);
+            }
+        }
+    }
+
     double marketPrice = GetMarketPrice(proto->ItemId, auctionHouse);
 
     if (!ignoreMarket && marketPrice > 0)
     {
         if (explain) *explain << "market";
-        return marketPrice;
+        return ApplyVendorFloorAndMax((uint32)marketPrice, proto->SellPrice, sAhBotConfig.vendorFloorEnabled,
+            sAhBotConfig.vendorFloorAddPercent, sAhBotConfig.maxBuyoutPrice);
     }
 
     uint32 now = time(0);
@@ -69,12 +88,16 @@ uint32 PricingStrategy::GetSellPrice(ItemPrototype const* proto, uint32 auctionH
             (double)sAhBotConfig.priceMultiplier,
             NULL);
 
-    return RoundPrice(price);
+    uint32 rounded = RoundPrice(price);
+    return ApplyVendorFloorAndMax(rounded, proto->SellPrice, sAhBotConfig.vendorFloorEnabled,
+        sAhBotConfig.vendorFloorAddPercent, sAhBotConfig.maxBuyoutPrice);
 }
 
 double PricingStrategy::GetMarketPrice(uint32 itemId, uint32 auctionHouse)
 {
     double marketPrice = 0;
+    if (auctionbot.TryGetCachedMarketPrice(itemId, auctionHouse, marketPrice))
+        return RoundPrice(marketPrice);
 
     auto results = CharacterDatabase.PQuery("SELECT price FROM ahbot_price WHERE item = '%u' AND auction_house = '%u'", itemId, auctionHouse);
     std::unique_ptr<QueryResult> results_guard(results);
@@ -88,6 +111,24 @@ double PricingStrategy::GetMarketPrice(uint32 itemId, uint32 auctionHouse)
 
 uint32 PricingStrategy::GetBuyPrice(ItemPrototype const* proto, uint32 auctionHouse, std::ostringstream *explain)
 {
+    if (sAhBotConfig.customPriceStatsEnabled)
+    {
+        PricePercentiles stats;
+        if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))
+        {
+            uint32 rolled = RollPercentilePrice(stats, sAhBotConfig.customPriceStatsMinSampleCount, true,
+                explain ? 50 : urand(1, 100), explain ? 0 : urand(0, 0x7fffffff));
+            if (rolled)
+            {
+                if (explain) *explain << "percentile-stats";
+                rolled = ScaleU32(rolled, sAhBotConfig.buyerAcceptablePriceModifier);
+                rolled = ApplyVendorFloorAndMax(rolled, proto->SellPrice, sAhBotConfig.vendorFloorEnabled,
+                    sAhBotConfig.vendorFloorAddPercent, sAhBotConfig.maxBuyoutPrice);
+                return RoundPrice(rolled);
+            }
+        }
+    }
+
     uint32 untilTime = time(0) - 3600 * 12;
     double price = CalculatePrice(explain,
             "buy",
@@ -111,7 +152,9 @@ uint32 PricingStrategy::GetBuyPrice(ItemPrototype const* proto, uint32 auctionHo
             "static",
             (double)sAhBotConfig.priceMultiplier,
             NULL);
-    return RoundPrice(price);
+    uint32 rounded = RoundPrice(price);
+    return ApplyVendorFloorAndMax(rounded, proto->SellPrice, sAhBotConfig.vendorFloorEnabled,
+        sAhBotConfig.vendorFloorAddPercent, sAhBotConfig.maxBuyoutPrice);
 }
 
 double PricingStrategy::GetRarityPriceMultiplier(uint32 itemId)
@@ -129,11 +172,19 @@ double PricingStrategy::GetLevelPriceMultiplier(ItemPrototype const* proto)
 
 double PricingStrategy::GetCategoryPriceMultiplier(uint32 untilTime, uint32 auctionHouse)
 {
+    uint32 faction = AhBot::factions[auctionHouse];
+    if (auctionbot.HasCycleCache())
+    {
+        bool buyer = untilTime + 6 * 3600 < (uint32)time(0);
+        uint32 count = auctionbot.GetCachedCategoryDayCount(category->GetName(), faction, buyer);
+        return count ? 1.0 + count : 1.0;
+    }
+
     double result = 1.0;
 
     auto results = CharacterDatabase.PQuery(
         "SELECT count(*) FROM (SELECT round(buytime/3600/24/5) as days FROM ahbot_history WHERE category = '%s' AND won = '1' AND buytime <= '%u' AND auction_house = '%u' group by days) q",
-        category->GetName().c_str(), untilTime, AhBot::factions[auctionHouse]);
+        category->GetName().c_str(), untilTime, faction);
     std::unique_ptr<QueryResult> results_guard(results);
     if (results)
     {
@@ -156,11 +207,18 @@ double PricingStrategy::GetMultiplier(double count, double firstBuyTime, double 
 
 double PricingStrategy::GetItemPriceMultiplier(ItemPrototype const* proto, uint32 untilTime, uint32 auctionHouse)
 {
+    uint32 faction = AhBot::factions[auctionHouse];
+    if (auctionbot.HasCycleCache())
+    {
+        bool buyer = untilTime + 6 * 3600 < (uint32)time(0);
+        return 1.0 + auctionbot.GetCachedItemDayCount(proto->ItemId, faction, buyer);
+    }
+
     double result = 1.0;
 
     auto results = CharacterDatabase.PQuery(
         "SELECT count(*) FROM (SELECT round(buytime/3600/24/5) as days FROM ahbot_history WHERE won = '1' AND item = '%u' AND buytime <= '%u' AND auction_house = '%u' group by days) q",
-        proto->ItemId, untilTime, AhBot::factions[auctionHouse]);
+        proto->ItemId, untilTime, faction);
     std::unique_ptr<QueryResult> results_guard(results);
     if (results)
     {
