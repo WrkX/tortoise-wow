@@ -21,10 +21,10 @@
 -- crash is a restart loop.
 --
 -- Two things make this easy to walk into. The failure message names the
--- sql/updates folders rather than the missing table, and
--- mangosd.conf.dist.in ships `BackupCharacterInventory = 1` while the code
--- itself defaults the setting to false - so taking the shipped config as-is
--- turns on a feature whose table nobody creates.
+-- sql/updates folders rather than the missing table, and mangosd.conf.dist.in
+-- ships `BackupCharacterInventory = 1` while the code itself defaults the
+-- setting to false - so taking the shipped config as-is turns on a feature
+-- whose table nobody creates.
 --
 -- LIKE is deliberate: it keeps the copy in step with the original, which is
 -- what the INSERT ... SELECT * in BackupCharacterInventory() needs. Servers
