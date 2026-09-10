@@ -221,17 +221,20 @@ AhBot.Buyer.Enabled = 1
 AhBot.DEBUG = 0
 
 ###################################################################################################################
-# PER-HOUSE POPULATION
+# SHARED POPULATION
 #
-# When MinItems and MaxItems are both 0 (default), the existing per-category
-# MaxAuctionCount caps are the only population control.
-# When set, each house rolls a daily target in [Min,Max], scaled by
-# TargetPercent, persisted in characters.ahbot_house_target, and listings are
-# added gradually (ItemsPerCycle per check) until that target is reached.
-# Category MaxAuctionCount still applies on top.
+# When Shared.MinItems and Shared.MaxItems are set, every physical auction
+# house rolls its daily target from this one shared range. The target is
+# persisted in characters.ahbot_house_target and listings are added gradually
+# (ItemsPerCycle per check) until it is reached. Category and item caps still
+# apply on top. The legacy per-house settings below remain as a compatibility
+# fallback when the shared range is left at 0/0.
 ###################################################################################################################
 
 AhBot.ItemsPerCycle = 0
+AhBot.Shared.MinItems = 0
+AhBot.Shared.MaxItems = 0
+AhBot.Shared.TargetPercent = 100
 AhBot.Alliance.MinItems = 0
 AhBot.Alliance.MaxItems = 0
 AhBot.Alliance.TargetPercent = 100

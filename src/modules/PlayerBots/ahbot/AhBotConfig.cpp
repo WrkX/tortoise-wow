@@ -107,6 +107,9 @@ bool AhBotConfig::Initialize()
     buyerEnabled = config.GetBoolDefault("AhBot.Buyer.Enabled", true);
 
     itemsPerCycle = (uint32)std::max(0, config.GetIntDefault("AhBot.ItemsPerCycle", 0));
+    sharedMinItems = (uint32)std::max(0, config.GetIntDefault("AhBot.Shared.MinItems", 0));
+    sharedMaxItems = (uint32)std::max(0, config.GetIntDefault("AhBot.Shared.MaxItems", 0));
+    sharedTargetPercent = (uint32)std::max(0, config.GetIntDefault("AhBot.Shared.TargetPercent", 100));
     allianceMinItems = (uint32)std::max(0, config.GetIntDefault("AhBot.Alliance.MinItems", 0));
     allianceMaxItems = (uint32)std::max(0, config.GetIntDefault("AhBot.Alliance.MaxItems", 0));
     allianceTargetPercent = (uint32)std::max(0, config.GetIntDefault("AhBot.Alliance.TargetPercent", 100));

@@ -40,6 +40,7 @@ public:
     bool sendmail;
 
     uint32 itemsPerCycle;
+    uint32 sharedMinItems, sharedMaxItems, sharedTargetPercent;
     uint32 allianceMinItems, allianceMaxItems, allianceTargetPercent;
     uint32 hordeMinItems, hordeMaxItems, hordeTargetPercent;
     uint32 neutralMinItems, neutralMaxItems, neutralTargetPercent;

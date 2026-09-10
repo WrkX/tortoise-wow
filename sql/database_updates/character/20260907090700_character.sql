@@ -2,8 +2,8 @@
 -- src/modules/PlayerBots/ahbot/tools/build_ahbot_price_stats.py; this
 -- migration never inserts item IDs.
 --
--- auction_house uses the same house ids AhBot.cpp writes (1 Alliance, 6 Horde,
--- 7 Neutral). suffix_id 0 is an item with no random property.
+-- Generated market statistics use auction_house=0 for the shared market.
+-- Physical auction houses remain 1 Alliance, 6 Horde, and 7 Neutral.
 
 CREATE TABLE IF NOT EXISTS `ahbot_house_target` (
   `auction_house` int(10) unsigned NOT NULL,
