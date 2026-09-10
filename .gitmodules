@@ -1,7 +1,12 @@
 [submodule "src/modules/Eluna"]
 	path = src/modules/Eluna
 	url = https://github.com/ElunaLuaEngine/Eluna.git
+
 [submodule "modules/mod-reagent-bank"]
-	path = modules/mod-reagent-bank
+	path = src/modules/mod-reagent-bank
 	url = https://github.com/WrkX/mod-reagent-bank.git
-	branch = main
+
+[submodule "src/modules/GroupQuestLoot"]
+	path = src/modules/GroupQuestLoot
+	url = https://github.com/WrkX/tortoise-group-quest-loot.git
+

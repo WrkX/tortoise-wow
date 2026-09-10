@@ -1,5 +1,8 @@
 # AHBot market stats from daily Aux snapshots
 
+For a short, implementation-neutral handoff to another agent, see
+[`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+
 Builds percentile and availability SQL for Turtle WoW (Vanilla) auction houses
 from daily Aux-derived dumps. Apply the generated file to the **characters**
 database (`tw_char`). The C++ AhBot runtime reads the same tables from
@@ -80,6 +83,10 @@ Header (optional, validated when present):
 
 If `complete=0` or `expected_listings` does not match the number of accepted
 rows, the build exits unless you pass `--allow-incomplete`.
+
+The builder also refuses files with an unknown faction or zero parsed listings,
+because the default refresh truncates the existing stats. To represent a
+genuinely empty auction-house scan, declare `expected_listings=0` explicitly.
 
 Turtle listing rows (per-unit copper). `buyout` + `quantity` is accepted and
 converted with integer division:

@@ -1,8 +1,5 @@
 
 #include "Category.h"
-#include <algorithm>
-#include <cctype>
-#include <cmath>
 #include <memory>
 #include <sstream>
 #include "ItemBag.h"
@@ -30,6 +27,8 @@
 #include <thread>
 
 using namespace ahbot;
+
+extern bool IsPlayerHardcore(uint32 lowGuid);
 
 bool AhBot::HandleAhBotCommand(ChatHandler* handler, char const* args)
 {
@@ -181,7 +180,7 @@ void AhBot::ForceUpdate(bool simulate)
 	}
 
     dryRun = simulate;
-	sLog.outString("[AhBot] === Auction check starting%s ===", dryRun ? " (simulate)" : "");
+    sLog.outString("[AhBot] === Auction check starting%s ===", dryRun ? " (simulate)" : "");
 
 	if (!allBidders.size())
 	{
@@ -197,8 +196,8 @@ void AhBot::ForceUpdate(bool simulate)
 		return;
 	}
 
-	sLog.outString("[AhBot] Bidders loaded: %zu total (A=%zu H=%zu N=%zu) seller=%s buyer=%s",
-		allBidders.size(), bidders[1].size(), bidders[2].size(), bidders[3].size(),
+    sLog.outString("[AhBot] Bidders loaded: %zu total (A=%zu H=%zu N=%zu) seller=%s buyer=%s",
+        allBidders.size(), bidders[1].size(), bidders[2].size(), bidders[3].size(),
         sAhBotConfig.sellerEnabled ? "on" : "off",
         sAhBotConfig.buyerEnabled ? "on" : "off");
 
@@ -282,7 +281,7 @@ void AhBot::ForceUpdate(bool simulate)
 	}
 
     if (!dryRun)
-	    CleanupHistory();
+        CleanupHistory();
 
 	sLog.outString("[AhBot] === Check complete: %d answered, %d added. Next check in %d seconds ===",
 		answered, added, sAhBotConfig.updateInterval);
@@ -655,11 +654,24 @@ int AhBot::Answer(int auction, Category* category, ItemBag* inAuctionItems, cons
 
         PendingPurchase pending;
         pending.auctionId   = snap.Id;
+        pending.itemGuidLow = snap.itemGuidLow;
         pending.bidder      = bidder;
-        pending.bidAmount   = decision.bid && decision.bidAmount ? decision.bidAmount : curPrice + urand(1, 1 + bidPrice / 10);
-        pending.unitPrice   = price;
+        pending.bidAmount   = decision.buyout ? snap.buyout :
+            (decision.bid && decision.bidAmount ? decision.bidAmount :
+                SaturatingAdd(curPrice, urand(1, 1 + bidPrice / 10)));
         pending.minBuyout   = minBuyout;
+        pending.expectedBidder = snap.bidder;
+        pending.expectedBid = snap.bid;
+        pending.expectedBuyout = snap.buyout;
         pending.houseIndex  = auction;
+
+        if (availableMoney < (int64)pending.bidAmount)
+        {
+            if (sAhBotConfig.realismDebug)
+                sLog.outString("[AhBot] SKIP %s (x%u): selected offer %u exceeds remaining budget %ld",
+                    proto->Name1.c_str(), snap.itemCount, pending.bidAmount, availableMoney);
+            continue;
+        }
 
         if (dryRun)
         {
@@ -674,7 +686,7 @@ int AhBot::Answer(int auction, Category* category, ItemBag* inAuctionItems, cons
                     snap.itemCount, proto->Name1.c_str(), auctionIds[auction], pending.bidAmount, bidder);
         }
 
-        availableMoney -= curPrice;
+        availableMoney -= pending.bidAmount;
         {
             std::lock_guard<std::mutex> g(cacheMutex);
             cycleCache.availableMoney[auctionIds[auction]] = availableMoney;
@@ -790,7 +802,7 @@ uint32 AhBot::GetSellTime(uint32 itemId, uint32 auctionHouse, Category*& categor
     return result ? result : itemTime;
 }
 
-int AhBot::AddAuctions(int auction, Category* category, ItemBag* inAuctionItems, const HouseSnapshotIndex& index, int& remainingCycle)
+int AhBot::AddAuctions(int auction, Category* category, ItemBag* inAuctionItems, HouseSnapshotIndex& index, int& remainingCycle)
 {
     if (remainingCycle <= 0)
         return 0;
@@ -898,6 +910,11 @@ int AhBot::AddAuctions(int auction, Category* category, ItemBag* inAuctionItems,
         int posted = AddAuction(auction, category, proto, index);
         added += posted;
         remainingCycle -= posted;
+        if (posted > 0)
+        {
+            index.botActiveCount[proto->ItemId] += (uint32)posted;
+            index.totalCount += (uint32)posted;
+        }
     }
 
     if (added > 0 || ladded > 0)
@@ -942,11 +959,17 @@ int AhBot::AddAuction(int auction, Category* category, ItemPrototype const* prot
     if (urand(0, 100) <= sAhBotConfig.underPriceProbability * 100)
         price = price * 100 / urand(100, 200);
 
-    uint32 buyoutHigh = price + price / 3;
-    if (buyoutHigh < price)
-        buyoutHigh = 4294967295u;
+    uint32 variedBuyoutUnit;
+    if (sAhBotConfig.buyoutVariationReducePercent > 0.0f || sAhBotConfig.buyoutVariationAddPercent > 0.0f)
+        variedBuyoutUnit = VaryPrice(price, sAhBotConfig.buyoutVariationReducePercent,
+            sAhBotConfig.buyoutVariationAddPercent, urand(0, 0x7fffffff));
+    else
+    {
+        uint32 buyoutHigh = SaturatingAdd(price, price / 3);
+        variedBuyoutUnit = urand(price, buyoutHigh);
+    }
     uint32 bidPrice = PricingStrategy::RoundPrice(SaturatingMul(stackCount, price));
-    uint32 buyoutPrice = PricingStrategy::RoundPrice(SaturatingMul(stackCount, urand(price, buyoutHigh)));
+    uint32 buyoutPrice = PricingStrategy::RoundPrice(SaturatingMul(stackCount, variedBuyoutUnit));
     if (sAhBotConfig.bidVariationLowReducePercent > 0.0f || sAhBotConfig.bidVariationHighReducePercent > 0.0f)
         bidPrice = PricingStrategy::RoundPrice(BidFromBuyout(buyoutPrice, sAhBotConfig.bidVariationLowReducePercent,
             sAhBotConfig.bidVariationHighReducePercent, urand(0, 0x7fffffff)));
@@ -1684,6 +1707,12 @@ void AhBot::ExecutePurchase(const PendingPurchase& p)
     if (!entry)
         return;
 
+    // A player may have bid or bought out after the worker took its snapshot.
+    // Recalculate on the next cycle instead of applying a stale offer.
+    if (entry->itemGuidLow != p.itemGuidLow || entry->bidder != p.expectedBidder ||
+        entry->bid != p.expectedBid || entry->buyout != p.expectedBuyout)
+        return;
+
     Item* item = sAuctionMgr.GetAItem(entry->itemGuidLow);
     if (!item || !item->GetCount())
         return;
@@ -1692,11 +1721,32 @@ void AhBot::ExecutePurchase(const PendingPurchase& p)
     if (!proto)
         return;
 
+    uint32 oldBidder = entry->bidder;
+    uint32 oldBid = entry->bid;
+
+    // Real bidders paid when placing their bid. Return that escrow before the
+    // synthetic buyer replaces them, matching WorldSession's normal outbid path.
+    if (oldBidder && oldBidder != p.bidder && !IsPlayerHardcore(oldBidder))
+    {
+        ObjectGuid oldBidderGuid(HIGHGUID_PLAYER, oldBidder);
+        Player* oldBidderPlayer = sObjectMgr.GetPlayer(oldBidderGuid);
+        uint32 oldBidderAccount = oldBidderPlayer ? oldBidderPlayer->GetSession()->GetAccountId() :
+            sObjectMgr.GetPlayerAccountIdByGUID(oldBidderGuid);
+        if (oldBidderPlayer || oldBidderAccount)
+        {
+            std::ostringstream subject;
+            subject << entry->itemTemplate << ":0:" << AUCTION_OUTBIDDED;
+            MailDraft(subject.str())
+                .SetMoney(oldBid)
+                .SendMailTo(MailReceiver(oldBidderPlayer, oldBidderGuid), entry, MAIL_CHECK_MASK_COPIED);
+        }
+    }
+
     entry->bidder = p.bidder;
     entry->bid = p.bidAmount;
 
     if ((entry->buyout && (entry->bid >= entry->buyout ||
-            (uint64)100 * (entry->buyout - entry->bid) / std::max(p.unitPrice, 1u) < 25)) &&
+            (uint64)100 * (entry->buyout - entry->bid) / entry->buyout < 25)) &&
             !(p.minBuyout && entry->buyout && p.minBuyout < entry->buyout))
     {
         entry->bid = entry->buyout;
@@ -1709,7 +1759,7 @@ void AhBot::ExecutePurchase(const PendingPurchase& p)
                 item->GetCount(), proto->Name1.c_str(), auctionIds[p.houseIndex], entry->bid, p.bidder);
     }
 
-    updateMarketPrice(proto->ItemId, entry->buyout / item->GetCount(), auctionIds[p.houseIndex]);
+    updateMarketPrice(proto->ItemId, entry->bid / item->GetCount(), auctionIds[p.houseIndex]);
 
     // Pay the seller immediately and finalize the auction.
     // If the item is an upgrade for the bidder bot, equip it directly in the DB.
@@ -1961,8 +2011,11 @@ void AhBot::LoadCycleCache()
         } while (results->NextRow());
     }
 
+    uint32 cacheNow = (uint32)time(0);
+    uint32 buyerCutoff = cacheNow > 12 * HOUR ? cacheNow - 12 * HOUR : 0;
     if (auto results = CharacterDatabase.PQuery(
-            "SELECT category, auction_house, COUNT(*) FROM (SELECT category, auction_house, ROUND(buytime/3600/24/5) AS days FROM ahbot_history WHERE won = '1' GROUP BY category, auction_house, days) q GROUP BY category, auction_house"))
+            "SELECT category, auction_house, COUNT(*) FROM (SELECT category, auction_house, ROUND(buytime/3600/24/5) AS days FROM ahbot_history WHERE won = '1' AND buytime <= '%u' GROUP BY category, auction_house, days) q GROUP BY category, auction_house",
+            cacheNow))
     {
         std::unique_ptr<QueryResult> guard(results);
         do
@@ -1975,13 +2028,40 @@ void AhBot::LoadCycleCache()
     }
 
     if (auto results = CharacterDatabase.PQuery(
-            "SELECT item, auction_house, COUNT(*) FROM (SELECT item, auction_house, ROUND(buytime/3600/24/5) AS days FROM ahbot_history WHERE won = '1' GROUP BY item, auction_house, days) q GROUP BY item, auction_house"))
+            "SELECT category, auction_house, COUNT(*) FROM (SELECT category, auction_house, ROUND(buytime/3600/24/5) AS days FROM ahbot_history WHERE won = '1' AND buytime <= '%u' GROUP BY category, auction_house, days) q GROUP BY category, auction_house",
+            buyerCutoff))
+    {
+        std::unique_ptr<QueryResult> guard(results);
+        do
+        {
+            Field* fields = results->Fetch();
+            std::ostringstream key;
+            key << fields[0].GetCppString() << '|' << fields[1].GetUInt32();
+            next.buyerCategoryDayCounts[key.str()] = fields[2].GetUInt32();
+        } while (results->NextRow());
+    }
+
+    if (auto results = CharacterDatabase.PQuery(
+            "SELECT item, auction_house, COUNT(*) FROM (SELECT item, auction_house, ROUND(buytime/3600/24/5) AS days FROM ahbot_history WHERE won = '1' AND buytime <= '%u' GROUP BY item, auction_house, days) q GROUP BY item, auction_house",
+            cacheNow))
     {
         std::unique_ptr<QueryResult> guard(results);
         do
         {
             Field* fields = results->Fetch();
             next.itemDayCounts[CacheKey(fields[0].GetUInt32(), fields[1].GetUInt32())] = fields[2].GetUInt32();
+        } while (results->NextRow());
+    }
+
+    if (auto results = CharacterDatabase.PQuery(
+            "SELECT item, auction_house, COUNT(*) FROM (SELECT item, auction_house, ROUND(buytime/3600/24/5) AS days FROM ahbot_history WHERE won = '1' AND buytime <= '%u' GROUP BY item, auction_house, days) q GROUP BY item, auction_house",
+            buyerCutoff))
+    {
+        std::unique_ptr<QueryResult> guard(results);
+        do
+        {
+            Field* fields = results->Fetch();
+            next.buyerItemDayCounts[CacheKey(fields[0].GetUInt32(), fields[1].GetUInt32())] = fields[2].GetUInt32();
         } while (results->NextRow());
     }
 
@@ -2181,7 +2261,8 @@ uint32 AhBot::ApplySellPriceAdjustments(const ItemPrototype* proto, uint32 unitP
     uint32 price = unitPrice ? unitPrice : 1;
     PricePercentiles stats;
     const PricePercentiles* statsPtr = TryGetPriceStats(proto->ItemId, auctionHouse, stats) ? &stats : nullptr;
-    uint32 floorPrice = SellerPriceFloor(proto->SellPrice, statsPtr, sAhBotConfig.customPriceStatsMinSampleCount, sAhBotConfig.priceFloorStatsMultiplier);
+    uint32 vendorFloor = sAhBotConfig.vendorFloorEnabled ? proto->SellPrice : 1;
+    uint32 floorPrice = SellerPriceFloor(vendorFloor, statsPtr, sAhBotConfig.customPriceStatsMinSampleCount, sAhBotConfig.priceFloorStatsMultiplier);
 
     uint32 lowest = 0;
     std::map<uint32, uint32>::const_iterator lowIt = index.lowestBuyoutPerUnit.find(proto->ItemId);
@@ -2265,24 +2346,26 @@ bool AhBot::TryGetCachedMarketPrice(uint32 itemId, uint32 auctionHouse, double& 
     return true;
 }
 
-uint32 AhBot::GetCachedCategoryDayCount(const std::string& category, uint32 faction)
+uint32 AhBot::GetCachedCategoryDayCount(const std::string& category, uint32 faction, bool buyer)
 {
     std::lock_guard<std::mutex> g(cacheMutex);
     if (!cycleCache.valid)
         return 0;
     std::ostringstream key;
     key << category << '|' << faction;
-    std::map<std::string, uint32>::const_iterator it = cycleCache.categoryDayCounts.find(key.str());
-    return it == cycleCache.categoryDayCounts.end() ? 0 : it->second;
+    const std::map<std::string, uint32>& counts = buyer ? cycleCache.buyerCategoryDayCounts : cycleCache.categoryDayCounts;
+    std::map<std::string, uint32>::const_iterator it = counts.find(key.str());
+    return it == counts.end() ? 0 : it->second;
 }
 
-uint32 AhBot::GetCachedItemDayCount(uint32 itemId, uint32 faction)
+uint32 AhBot::GetCachedItemDayCount(uint32 itemId, uint32 faction, bool buyer)
 {
     std::lock_guard<std::mutex> g(cacheMutex);
     if (!cycleCache.valid)
         return 0;
-    std::map<uint64, uint32>::const_iterator it = cycleCache.itemDayCounts.find(CacheKey(itemId, faction));
-    return it == cycleCache.itemDayCounts.end() ? 0 : it->second;
+    const std::map<uint64, uint32>& counts = buyer ? cycleCache.buyerItemDayCounts : cycleCache.itemDayCounts;
+    std::map<uint64, uint32>::const_iterator it = counts.find(CacheKey(itemId, faction));
+    return it == counts.end() ? 0 : it->second;
 }
 
 bool AhBot::TryGetPriceStats(uint32 itemId, uint32 auctionHouse, PricePercentiles& outStats, int32 suffixId)

@@ -258,6 +258,34 @@ class BuilderEndToEndTests(unittest.TestCase):
         code, _sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 1)
 
+    def test_missing_faction_fails_before_generating_house_zero(self) -> None:
+        snapshot = write_sql(
+            self.root / "snapshot.sql",
+            "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (2580, 40);\n",
+        )
+        code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 1)
+        self.assertEqual(sql, "")
+
+    def test_empty_snapshot_requires_explicit_zero_count(self) -> None:
+        snapshot = write_sql(
+            self.root / "nordanaar_alliance_2026-09-01.sql",
+            "-- AHBOT_SNAPSHOT faction=alliance date=2026-09-01\n",
+        )
+        code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 1)
+        self.assertEqual(sql, "")
+
+    def test_declared_empty_snapshot_is_accepted(self) -> None:
+        snapshot = write_sql(
+            self.root / "nordanaar_alliance_2026-09-01.sql",
+            "-- AHBOT_SNAPSHOT faction=alliance date=2026-09-01 expected_listings=0\n",
+        )
+        code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 0)
+        self.assertIn("TRUNCATE TABLE `ahbot_price_stats`;", sql)
+        self.assertIn("VALUES (1,", sql)
+
     def test_turtle_custom_ids_in_expansion_numeric_gap_are_kept(self) -> None:
         snapshot = write_sql(
             self.root / "nordanaar_alliance_2026-09-01.sql",
