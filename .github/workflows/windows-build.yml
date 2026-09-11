@@ -172,6 +172,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=$env:BUILD_TYPE `
             -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR" `
             -DBUILD_PLAYERBOTS=ON `
+            -DMODULE_MOD_DUNGEON_CLEAR=static `
             -DUSE_EXTRACTORS=ON `
             -DALLOW_TURTLE_ADDONS=ON `
             -DACE_ROOT="$v" `
