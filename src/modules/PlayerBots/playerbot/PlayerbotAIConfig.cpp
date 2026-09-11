@@ -283,6 +283,9 @@ bool PlayerbotAIConfig::Initialize()
     maxRandomBotChangeStrategyTime = config.GetIntDefault("AiPlayerbot.MaxRandomBotChangeStrategyTime", 2 * 3600);
     minRandomBotReviveTime = config.GetIntDefault("AiPlayerbot.MinRandomBotReviveTime", 60);
     maxRandomBotReviveTime = config.GetIntDefault("AiPlayerbot.MaxRandomReviveTime", 300);
+    questGroupFillQuestGraceSeconds = config.GetIntDefault("AiPlayerbot.QuestGroupFillQuestGraceSeconds", 120);
+    questGroupFillIdleSeconds = config.GetIntDefault("AiPlayerbot.QuestGroupFillIdleSeconds", 900);
+    questGroupFillOwnerOfflineSeconds = config.GetIntDefault("AiPlayerbot.QuestGroupFillOwnerOfflineSeconds", 300);
     enableRandomTeleports = config.GetBoolDefault("AiPlayerbot.EnableRandomTeleports", true);
 
     // While nobody real is waiting, bots keep at most this many instances of one

@@ -3,6 +3,7 @@
 #include "Chat.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "World.h"
 
 LFTManager sLFTMgr;
@@ -34,7 +35,7 @@ namespace
     }
 }
 
-LFTManager::LFTManager() : m_nextListingId(1), m_nextOfferId(1), m_nextQueueOrder(1), m_listingsLoaded(false), m_botFillTimer(0)
+LFTManager::LFTManager() : m_nextListingId(1), m_nextOfferId(1), m_nextQueueOrder(1), m_listingsLoaded(false), m_botFillTimer(0), m_questListingFillTimer(0)
 {
 }
 
@@ -83,6 +84,13 @@ bool LFTManager::HandleAddonMessage(Player* player, uint32 type, std::string con
         HandleQueueLeave(player);
     else if (fields[0] == "C2S_GET_QUEUE_STATUS")
         HandleGetQueueStatus(player);
+    else if (fields[0] == "C2S_QUEUE_FORCE_BOTS")
+    {
+        if (fields.size() != 1)
+            Send(player, "S2C_QUEUE_FORCE_RESULT;invalid");
+        else
+            Send(player, "S2C_QUEUE_FORCE_RESULT;" + RequestForceBotFill(player));
+    }
     else if (fields[0] == "C2S_ROLECHECK_RESPONSE")
         HandleRolecheckResponse(player, fields);
     else if (fields[0] == "C2S_OFFER_ACCEPT")
@@ -93,7 +101,11 @@ bool LFTManager::HandleAddonMessage(Player* player, uint32 type, std::string con
 
 void LFTManager::Update(uint32 diff)
 {
+    // Rendezvous must run before DropUnneededFillBots() can release the queue
+    // markers that identify the bots created for a completed offer.
+    UpdateDungeonRendezvous(diff);
     UpdateBotFill(diff);
+    UpdateQuestListingBotFill(diff);
 
     for (QueueMap::iterator itr = m_queue.begin(); itr != m_queue.end();)
     {
@@ -137,12 +149,17 @@ void LFTManager::OnPlayerLogout(ObjectGuid const& guid)
 {
     EnsureListingsLoaded();
     CleanupPlayer(guid);
+    m_forceBotFillCooldowns.erase(guid);
+
+    Player* logoutPlayer = sObjectMgr.GetPlayer(guid, false);
 
     bool changedListings = false;
     for (ListingsMap::iterator itr = m_listings.begin(); itr != m_listings.end();)
     {
         if (itr->second.creatorGuid == guid)
         {
+            if (logoutPlayer)
+                Script_CancelQuestListingFill(logoutPlayer, itr->second.id);
             changedListings = true;
             DeleteListingFromDB(itr->second.id);
             itr = m_listings.erase(itr);

@@ -20,6 +20,8 @@
 #include "Database/DatabaseImpl.h"
 #include "ObjectMgr.h"
 #include "Handlers/LoginQueryHolder.h"
+#include "LFT/LFTMgr.h"
+#include "QuestGroupFill.h"
 
 #ifdef GenerateBotTests
 #include "strategy/tests/TestAction.h"
@@ -240,6 +242,7 @@ PlayerbotHolder::PlayerbotHolder() : PlayerbotAIBase()
     m_holderHandlers["rl"] = &PlayerbotHolder::HandleRaidLeader;
     m_holderHandlers["create"] = &PlayerbotHolder::HandleCreate;
     m_holderHandlers["group"] = &PlayerbotHolder::HandleGroup;
+    m_holderHandlers["fill"] = &PlayerbotHolder::HandleFill;
 #ifdef GenerateBotTests
     m_holderHandlers["runtest"] = &PlayerbotHolder::HandleRunTest;
 #endif
@@ -1478,7 +1481,7 @@ std::list<std::string> PlayerbotHolder::HandleHelp(Player* master, const std::st
     
     if (param.empty())
     {
-        messages.push_back("Available commands: list, reload, tweak, always, self, debug, c, do, record, read, clear");
+        messages.push_back("Available commands: list, reload, tweak, always, self, group, fill, debug, c, do, record, read, clear");
         messages.push_back("Type 'help <command>' for more information on a specific command.");
         return messages;
     }
@@ -2517,6 +2520,131 @@ std::list<std::string> PlayerbotHolder::HandleCreate(Player* master, const std::
     return messages;
 }
 
+std::list<std::string> PlayerbotHolder::HandleFill(Player* master, const std::string param, AccountTypes security)
+{
+    (void)security;
+
+    std::list<std::string> messages;
+    if (!master)
+    {
+        messages.push_back("fill requires an in-game player");
+        return messages;
+    }
+
+    QuestGroupFill::Service* service = QuestGroupFill::GetService();
+    auto unavailable = [&messages]()
+    {
+        messages.push_back("Quest group fill is unavailable (quest_group_fill module is not loaded)");
+    };
+
+    std::vector<std::string> args = Qualified::getMultiQualifiers(param, " ");
+    if (args.empty())
+    {
+        messages.push_back("Usage: .bot fill dungeon | quest=<id> size=<2..5> [force] | status | cancel");
+        return messages;
+    }
+
+    if (args.size() == 1 && args[0] == "dungeon")
+    {
+        messages.push_back("Dungeon LFT force fill: " + sLFTMgr.RequestForceBotFill(master));
+        return messages;
+    }
+
+    if (args.size() == 1 && args[0] == "status")
+    {
+        if (!service)
+            unavailable();
+        else
+            messages.push_back(service->Status(master));
+        return messages;
+    }
+
+    if (args.size() == 1 && args[0] == "cancel")
+    {
+        if (!service)
+            unavailable();
+        else
+            messages.push_back(service->Cancel(master));
+        return messages;
+    }
+
+    if (!service)
+    {
+        unavailable();
+        return messages;
+    }
+
+    QuestGroupFill::Request request;
+    bool haveQuest = false;
+
+    for (const std::string& arg : args)
+    {
+        if (arg == "force")
+        {
+            request.force = true;
+            continue;
+        }
+
+        size_t eqPos = arg.find('=');
+        if (eqPos == std::string::npos || eqPos == 0 || eqPos + 1 >= arg.size())
+        {
+            messages.push_back("Invalid fill option '" + arg + "'. Use quest=<id>, size=<2..5>, or force.");
+            return messages;
+        }
+
+        std::string key = arg.substr(0, eqPos);
+        std::string value = arg.substr(eqPos + 1);
+        if (!Qualified::isValidNumberString(value))
+        {
+            messages.push_back("Invalid " + key + " value '" + value + "'");
+            return messages;
+        }
+
+        try
+        {
+            unsigned long number = std::stoul(value);
+            if (key == "quest")
+            {
+                if (number == 0 || number > 0xFFFFFFFFUL)
+                {
+                    messages.push_back("Quest id must be between 1 and 4294967295");
+                    return messages;
+                }
+                request.questId = static_cast<std::uint32_t>(number);
+                haveQuest = true;
+            }
+            else if (key == "size")
+            {
+                if (number < 2 || number > 5)
+                {
+                    messages.push_back("Quest group size must be between 2 and 5");
+                    return messages;
+                }
+                request.size = static_cast<std::uint8_t>(number);
+            }
+            else
+            {
+                messages.push_back("Unknown fill option '" + key + "'");
+                return messages;
+            }
+        }
+        catch (...)
+        {
+            messages.push_back("Invalid " + key + " value '" + value + "'");
+            return messages;
+        }
+    }
+
+    if (!haveQuest)
+    {
+        messages.push_back("Usage: .bot fill quest=<id> size=<2..5> [force]");
+        return messages;
+    }
+
+    messages.push_back(service->Start(master, request));
+    return messages;
+}
+
 std::list<std::string> PlayerbotHolder::HandleGroup(Player* master, const std::string param, AccountTypes security)
 {
     std::list<std::string> messages;
@@ -3113,6 +3241,7 @@ std::unordered_map<std::string, std::string> PlayerbotHolder::GetCommandTexts()
         {"tweak", "Adjust the tweak value for testing (GM only).\nUsage: .(rnd)bot tweak"},
         {"self", "Enable self-bot mode for a player.\nUsage: .(rnd)bot self <playername>"},
         {"group", "Create 4 bots with complementary classes at master's level.\nUsage: .(rnd)bot group"},
+        {"fill", "Force-fill a queued dungeon or fill a player-led quest group. Force also activates bounded offline random bots.\nUsage: .bot fill dungeon\n .bot fill quest=<id> size=<2..5> [force]\n .bot fill status\n .bot fill cancel"},
         {"create", "Create a new bot character.\nUsage: .(rnd)bot create level=<n> class=<class> race=<race>"},
         {"spoof", "Spoof as another bot for command routing.\nUsage: .(rnd)bot spoof <botname>"},
         {"runtest", "Run bot tests.\nUsage: .rndbot runtest <testnamepart> [count]"},

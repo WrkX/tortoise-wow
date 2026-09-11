@@ -1937,6 +1937,8 @@ bool Script_IsMachineDriven(Player const* player);
 bool Script_HasAIFollowers(Player const* player);
 uint8 Script_GetAllowedRoles(Player const* player);
 void Script_SetForcedRole(Player* player, uint8 role);
+bool Script_FillQuestListing(Player* leader, uint32 listingId, uint32 questId, uint8 size, bool force);
+void Script_CancelQuestListingFill(Player* leader, uint32 listingId);
 
 uint32 GetAreaTriggerScriptId(uint32 triggerId);
 uint32 GetEventIdScriptId(uint32 eventId);
