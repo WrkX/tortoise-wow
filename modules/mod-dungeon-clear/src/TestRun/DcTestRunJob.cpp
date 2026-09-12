@@ -1529,7 +1529,8 @@ void DcTestRunJob::SweepPartyGeometry()
                     {
                         uint32 const slotKey = slot.guid.GetCounter();
                         uint32 const nowFar = getMSTime();
-                        bool far = false;
+                        // `far` is an empty macro in Windows' windef.h.
+                        bool isFar = false;
                         // A combat FLAG is not a fight. Live: three resurrected
                         // dps stood at the entrance 250yd from the party, all
                         // flagged in combat with no victim at all, so the
@@ -1546,7 +1547,7 @@ void DcTestRunJob::SweepPartyGeometry()
                             !bot->IsBeingTeleported() && tank->FindMap() == botMap &&
                             !reallyFighting && fenceDist > 120.0f)
                         {
-                            far = true;
+                            isFar = true;
                             uint32& since = _farSinceMs[slotKey];
                             if (since == 0)
                                 since = nowFar ? nowFar : 1;
@@ -1573,7 +1574,7 @@ void DcTestRunJob::SweepPartyGeometry()
                                 continue;
                             }
                         }
-                        if (!far)
+                        if (!isFar)
                             _farSinceMs[slotKey] = 0;
                     }
 
