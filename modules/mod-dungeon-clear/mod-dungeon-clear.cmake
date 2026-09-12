@@ -193,6 +193,10 @@ if(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "POST_TARGETS")
 
   target_link_libraries(modules PUBLIC playerbots)
 
+  # These definitions are private to the legacy playerbots target in this
+  # branch, but dungeon-clear compiles playerbots headers into `modules` too.
+  target_compile_definitions(modules PRIVATE CMANGOS MANGOSBOT_ZERO ENABLE_PLAYERBOTS)
+
   # AcCompat.h must be force-included before every module translation unit.
   # GCC/Clang use -include; MSVC uses /FI.  Passing the GCC spelling to cl.exe
   # is silently ignored, leaving the PlayerBots compatibility types undefined.
