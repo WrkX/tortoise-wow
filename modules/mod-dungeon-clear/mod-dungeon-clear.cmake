@@ -193,6 +193,14 @@ if(TORTOISE_MODULE_CMAKE_PHASE STREQUAL "POST_TARGETS")
 
   target_link_libraries(modules PUBLIC playerbots)
 
-  target_compile_options(modules PRIVATE
-    -include ${CMAKE_CURRENT_LIST_DIR}/src/AcCompat.h)
+  # AcCompat.h must be force-included before every module translation unit.
+  # GCC/Clang use -include; MSVC uses /FI.  Passing the GCC spelling to cl.exe
+  # is silently ignored, leaving the PlayerBots compatibility types undefined.
+  if(MSVC)
+    target_compile_options(modules PRIVATE
+      "/FI${CMAKE_CURRENT_LIST_DIR}/src/AcCompat.h")
+  else()
+    target_compile_options(modules PRIVATE
+      -include ${CMAKE_CURRENT_LIST_DIR}/src/AcCompat.h)
+  endif()
 endif()
