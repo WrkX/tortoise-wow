@@ -13,6 +13,7 @@
 #include "RandomPlayerbotFactory.h"
 #include "playerbot/ServerFacade.h"
 #include "playerbot/AiFactory.h"
+#include "playerbot/strategy/actions/AutoLearnSpellAction.h"
 #include "Guild/GuildMgr.h"
 
 #ifndef MANGOSBOT_ZERO
@@ -370,6 +371,37 @@ void PlayerbotFactory::Randomize(bool incremental, bool syncWithMaster)
         bot->SaveToDB();
     sLog.outDetail("Done.");
     pmo.reset();
+}
+
+void PlayerbotFactory::InitializeAtCurrentLevel()
+{
+    InitBags();
+    InitAvailableSpells();
+    InitAllSkills();
+    InitSpecialSpells();
+
+    AutoLearnSpellAction learner(ai);
+    learner.LearnLevelAppropriateSpells();
+    UpdateTradeSkills();
+
+    if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
+        LoadEnchantContainer();
+
+    InitEquipment(false, false);
+    InitGems();
+    InitAmmo();
+    InitFood();
+    InitPotions();
+    InitReagents();
+    AddConsumables();
+
+    if ((bot->getClass() == CLASS_HUNTER && bot->GetLevel() >= 10) || bot->getClass() == CLASS_WARLOCK)
+    {
+        InitPet();
+        InitPetSpells();
+    }
+
+    bot->SaveToDB();
 }
 
 void PlayerbotFactory::Refresh()

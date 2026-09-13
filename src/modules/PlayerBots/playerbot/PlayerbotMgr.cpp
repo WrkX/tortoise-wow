@@ -47,6 +47,7 @@ namespace {
     struct PendingBotLogin {
         ObjectGuid botGuid;
         uint32 masterAccountId;
+        bool cancelled = false;
     };
     std::map<SqlQueryHolder*, PendingBotLogin> m_pendingBotLogins;
 }
@@ -142,7 +143,7 @@ void PlayerbotHolder::AddPlayerBot(uint32 guidLow, uint32 masterAccountId)
         return;
     }
 
-    m_pendingBotLogins[holder] = { botGuid, masterAccountId };
+    m_pendingBotLogins[holder] = { botGuid, masterAccountId, false };
 
     // MUST be the Unsafe (main-thread) variant: the plain DelayQueryHolder marks the callback
     // threadSafe and SqlResultQueue::Update farms it out to a 6-thread callback pool, running
@@ -179,6 +180,12 @@ void PlayerbotHolder::HandlePlayerBotLoginCallback(QueryResult* /*dummy*/, SqlQu
 
     PendingBotLogin info = it->second;
     m_pendingBotLogins.erase(it);
+
+    if (info.cancelled)
+    {
+        delete holder;
+        return;
+    }
 
     LoginQueryHolder* lqh = static_cast<LoginQueryHolder*>(holder);
 
@@ -796,7 +803,9 @@ void PlayerbotHolder::OnBotLogin(Player * const bot)
         else
             GetBotAI(bot)->SetPlayerFriend(false);
 
-        if (sPlayerbotAIConfig.instantRandomize && !sPlayerbotAIConfig.disableRandomLevels && !bot->GetTotalPlayedTime())
+        bool const externallyManaged = sRandomPlayerbotMgr.IsExternallyManaged(lowguid);
+        if (!externallyManaged && sPlayerbotAIConfig.instantRandomize &&
+            !sPlayerbotAIConfig.disableRandomLevels && !bot->GetTotalPlayedTime())
         {
             sRandomPlayerbotMgr.InstaRandomize(bot);
         }
@@ -807,7 +816,7 @@ void PlayerbotHolder::OnBotLogin(Player * const bot)
         // (WorldPacketHandlerStrategy.cpp) never ran for it - it would otherwise sit at
         // its starting level with none of the trainer-taught abilities a real character
         // of that level would have. Catch it up once, on its first ever login.
-        if (sPlayerbotAIConfig.disableRandomLevels && !bot->GetTotalPlayedTime())
+        if (!externallyManaged && sPlayerbotAIConfig.disableRandomLevels && !bot->GetTotalPlayedTime())
         {
             ai->DoSpecificAction("auto learn spell");
         }
@@ -2264,7 +2273,8 @@ std::string PlayerbotHolder::HandleBotRemoveLogout(Player* bot, Player* master, 
     return "ok";
 }
 
-void PlayerbotHolder::CreateBot(Player* master, const std::string param, std::list<std::string>& messages, ObjectGuid& guid)
+void PlayerbotHolder::CreateBot(Player* master, const std::string param, std::list<std::string>& messages,
+    ObjectGuid& guid, std::string const& creationMarker)
 {    
     // Allow null master for RA/console usage
     // Player* master can be null when called via .rndbot commands
@@ -2450,6 +2460,12 @@ void PlayerbotHolder::CreateBot(Player* master, const std::string param, std::li
         if (temporary)
         {
             sRandomPlayerbotMgr.SetValue(botGuid, "temporary", 1, name);
+        }
+        if (!creationMarker.empty())
+        {
+            // Persist an ownership/lifecycle marker before the character row is
+            // queued so an external creator can recover a crash at any point.
+            sRandomPlayerbotMgr.SetValue(botGuid, creationMarker, 1);
         }
 
         if (master)
@@ -2856,8 +2872,16 @@ void PlayerbotHolder::OnBotDeleted(uint32 botGuid, uint32 accountId)
 {
 }
 
+void PlayerbotHolder::CancelPendingBotLogin(uint32 guid)
+{
+    for (auto& pending : m_pendingBotLogins)
+        if (pending.second.botGuid.GetCounter() == guid)
+            pending.second.cancelled = true;
+}
+
 bool PlayerbotHolder::DeleteBot(ObjectGuid guid, bool allowInstant)
 {
+    CancelPendingBotLogin(guid.GetCounter());
     uint32 botAccount = sObjectMgr.GetPlayerAccountIdByGUID(guid);
 
     if (Player* player = sObjectMgr.GetPlayer(guid, true))

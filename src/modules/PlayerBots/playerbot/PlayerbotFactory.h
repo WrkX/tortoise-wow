@@ -53,6 +53,9 @@ public:
     static void Init();
     void Refresh();
     void Randomize(bool incremental, bool syncWithMaster);
+    // Fully prepare a freshly-created bot at its existing level without
+    // changing that level or depending on random-bot configuration switches.
+    void InitializeAtCurrentLevel();
     static std::list<uint32> classQuestIds;
     static std::list<uint32> specialQuestIds;
     void InitSkills();
