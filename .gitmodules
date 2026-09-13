@@ -10,3 +10,7 @@
 	path = src/modules/GroupQuestLoot
 	url = https://github.com/WrkX/tortoise-group-quest-loot.git
 
+[submodule "modules/mod-crafting-orders"]
+	path = modules/mod-crafting-orders
+	url = https://github.com/WrkX/mod-crafting-orders.git
+	branch = main

@@ -35,6 +35,14 @@ jobs:
           "REAGENT_BANK_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Using pinned mod-reagent-bank $commit"
 
+      - name: Record pinned Crafting Orders module revision
+        shell: pwsh
+        run: |
+          $commit = git -C modules/mod-crafting-orders rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw "could not resolve pinned mod-crafting-orders commit" }
+          "CRAFTING_ORDERS_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Using pinned mod-crafting-orders $commit"
+
       # Pulling a moving module revision is intentionally limited to the main
       # push that feeds Windows Release. PR and manual builds retain the
       # superproject's gitlink pin for reproducibility.
@@ -52,6 +60,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "could not resolve mod-reagent-bank commit" }
           "REAGENT_BANK_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Building release artifact with mod-reagent-bank $commit"
+          git submodule update --remote --checkout modules/mod-crafting-orders
+          if ($LASTEXITCODE -ne 0) { throw "failed to update mod-crafting-orders from origin/main" }
+          $commit = git -C modules/mod-crafting-orders rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw "could not resolve mod-crafting-orders commit" }
+          "CRAFTING_ORDERS_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Building release artifact with mod-crafting-orders $commit"
 
       - name: Archive name
         shell: pwsh
@@ -102,6 +116,7 @@ jobs:
             "short=$env:GITHUB_SHORT_SHA"
             "ref=$env:GITHUB_REF"
             "mod_reagent_bank_commit=$env:REAGENT_BANK_COMMIT"
+            "mod_crafting_orders_commit=$env:CRAFTING_ORDERS_COMMIT"
           ) | Set-Content (Join-Path $sqlRoot 'BUILD_INFO.txt')
 
           $zip = Join-Path $root "$env:SQL_ARCHIVE_NAME.zip"
@@ -157,6 +172,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=$env:BUILD_TYPE `
             -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR" `
             -DBUILD_PLAYERBOTS=ON `
+            -DMODULE_MOD_DUNGEON_CLEAR=static `
             -DUSE_EXTRACTORS=ON `
             -DALLOW_TURTLE_ADDONS=ON `
             -DACE_ROOT="$v" `
@@ -198,6 +214,7 @@ jobs:
             "short=$env:GITHUB_SHORT_SHA"
             "ref=$env:GITHUB_REF"
             "mod_reagent_bank_commit=$env:REAGENT_BANK_COMMIT"
+            "mod_crafting_orders_commit=$env:CRAFTING_ORDERS_COMMIT"
           ) | Set-Content (Join-Path $dest 'BUILD_INFO.txt')
 
       - name: Zip

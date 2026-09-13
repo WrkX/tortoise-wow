@@ -538,7 +538,7 @@ elseif(WIN32)
   # Disable warnings in Visual Studio 8 and above and add /MP
   if(MSVC AND NOT CMAKE_GENERATOR MATCHES "Visual Studio 7")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS_RELEASE} /wd4996 /wd4355 /wd4244 /wd4985 /wd4267 /MP /EHsc")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_RELEASE} /wd4996 /wd4355 /wd4244 /wd4267 /MP /EHsc")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_RELEASE} /wd4996 /wd4355 /wd4244 /wd4267 /MP /EHsc /DDT_VIRTUAL_QUERYFILTER=1")
   endif()
 endif()
 
