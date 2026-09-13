@@ -17,4 +17,4 @@
 
 [submodule "modules/mod-companion-recruiter"]
 	path = modules/mod-companion-recruiter
-	url = https://github.com/WrkX/tortoise-companion-recruiter.git
+	url = https://github.com/WrkX/mod-companion-recruiter.git
