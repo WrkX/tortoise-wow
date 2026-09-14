@@ -8,9 +8,11 @@ generated market rows intentionally use auction_house=0: the C++ runtime uses
 that row as the shared-market fallback for physical houses 1/6/7.
 
 Presence frequency (days_seen / seen_count) is tracked separately from
-listing_count. Item ids are kept by default so Turtle custom entries in
-24284-49999 are not discarded; pass --reject-expansion-ids only when ingesting
-a known WotLK dump.
+listing_count. Account folders under WTF/Account without an Aux SavedVariables
+file are skipped; Aux files with neither a full snapshot nor legacy history are
+skipped instead of aborting the build. Item ids are kept by default so Turtle
+custom entries in 24284-49999 are not discarded; pass --reject-expansion-ids
+only when ingesting a known WotLK dump.
 """
 
 from __future__ import annotations
@@ -254,6 +256,31 @@ def sql_optional_int(value: int | None) -> str:
     return "NULL" if value is None else str(int(value))
 
 
+AUX_SAVEDVARIABLES_NAME_RE = re.compile(r"aux-addon.*\.lua(?:\.bak)?$")
+
+
+def is_aux_savedvariables_file(path: Path) -> bool:
+    return bool(AUX_SAVEDVARIABLES_NAME_RE.fullmatch(path.name.lower())) and any(
+        part.lower() == "savedvariables" for part in path.parts
+    )
+
+
+def is_account_folder(path: Path) -> bool:
+    parent = path.parent
+    return parent.name.lower() == "account" and parent.parent.name.lower() == "wtf"
+
+
+def account_folder_of(path: Path) -> Path | None:
+    current = path if path.is_dir() else path.parent
+    while True:
+        if is_account_folder(current):
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def collect_sql_files(inputs: list[Path], pattern: str, recursive: bool) -> list[Path]:
     files: list[Path] = []
     for input_path in inputs:
@@ -272,29 +299,56 @@ def collect_sql_files(inputs: list[Path], pattern: str, recursive: bool) -> list
     return sorted(unique.values(), key=lambda path: path.resolve().as_posix())
 
 
-def collect_input_files(inputs: list[Path], pattern: str, recursive: bool) -> list[Path]:
-    """Collect SQL and raw Aux files without deduplicating source contents."""
+def collect_input_files(
+    inputs: list[Path], pattern: str, recursive: bool
+) -> tuple[list[Path], list[Path]]:
+    """Collect SQL and raw Aux files without deduplicating source contents.
+
+    ``WTF/Account/<name>`` folders that contain no ``aux-addon*.lua`` SavedVariables
+    file are skipped instead of being treated as missing inputs.
+    """
     files: list[Path] = []
+    skipped_accounts: list[Path] = []
     for input_path in inputs:
         if input_path.is_file():
             files.append(input_path)
             continue
-        if input_path.is_dir():
-            iterator = input_path.rglob("*") if recursive else input_path.glob("*")
-            for path in iterator:
-                if not path.is_file():
-                    continue
-                name = path.name.lower()
-                if name.endswith(".sql") and path.match(pattern):
-                    files.append(path)
-                elif (
-                    re.fullmatch(r"aux-addon.*\.lua(?:\.bak)?", name)
-                    and any(part.lower() == "savedvariables" for part in path.parts)
-                ):
-                    files.append(path)
-            continue
-        raise FileNotFoundError(f"Input path does not exist: {input_path}")
-    return sorted(files, key=lambda path: path.resolve().as_posix())
+        if not input_path.is_dir():
+            raise FileNotFoundError(f"Input path does not exist: {input_path}")
+
+        iterator = input_path.rglob("*") if recursive else input_path.glob("*")
+        found_by_account: dict[Path | None, list[Path]] = defaultdict(list)
+        account_seen: dict[Path, Path] = {}
+
+        if is_account_folder(input_path):
+            account_seen[input_path.resolve()] = input_path
+
+        for path in iterator:
+            if path.is_dir() and is_account_folder(path):
+                account_seen[path.resolve()] = path
+                continue
+            if not path.is_file():
+                continue
+            account = account_folder_of(path)
+            key = account.resolve() if account is not None else None
+            name = path.name.lower()
+            if name.endswith(".sql") and path.match(pattern):
+                found_by_account[key].append(path)
+            elif is_aux_savedvariables_file(path):
+                found_by_account[key].append(path)
+
+        for resolved, account in sorted(account_seen.items(), key=lambda item: item[0].as_posix()):
+            account_files = found_by_account.get(resolved, [])
+            if any(is_aux_savedvariables_file(path) for path in account_files):
+                continue
+            print(f"Skipping account folder without Aux file: {account}", file=sys.stderr)
+            skipped_accounts.append(account)
+            found_by_account.pop(resolved, None)
+
+        for group in found_by_account.values():
+            files.extend(group)
+
+    return sorted(files, key=lambda path: path.resolve().as_posix()), skipped_accounts
 
 
 def infer_meta_from_path(path: Path, defaults: SnapshotMeta) -> SnapshotMeta:
@@ -878,7 +932,11 @@ def read_aux_file(
         observations.extend(block_observations)
         next_id += 1
     if not sources:
-        raise SnapshotError(f"{path}: no Aux full snapshot or non-empty legacy history found")
+        print(
+            f"Skipping Aux file without snapshot or history: {path}",
+            file=sys.stderr,
+        )
+        return [], []
     return sources, observations
 
 
@@ -1173,15 +1231,18 @@ def build_from_files(
     defaults: SnapshotMeta,
     allow_incomplete: bool,
     reject_expansion_ids: bool,
-) -> tuple[list[SourceRecord], list[Observation]]:
+) -> tuple[list[SourceRecord], list[Observation], list[Path]]:
     sources: list[SourceRecord] = []
     observations: list[Observation] = []
+    consumed: list[Path] = []
     next_id = 1
     for path in files:
         if path.name.lower().endswith(".lua") or path.name.lower().endswith(".lua.bak"):
             parsed_sources, parsed = read_aux_file(
                 path, next_id, defaults, allow_incomplete, reject_expansion_ids
             )
+            if not parsed_sources:
+                continue
             sources.extend(parsed_sources)
             next_id = max(source.source_id for source in parsed_sources) + 1
         else:
@@ -1190,14 +1251,15 @@ def build_from_files(
             )
             sources.append(record)
             next_id += 1
+        consumed.append(path)
         observations.extend(parsed)
-    return sources, observations
+    return sources, observations, consumed
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     roots = args.inputs or [args.aux_root or Path(__file__).resolve().parent]
-    files = collect_input_files(roots, args.pattern, args.recursive)
+    files, skipped_accounts = collect_input_files(roots, args.pattern, args.recursive)
     output_resolved = args.output.resolve()
     files = [path for path in files if path.resolve() != output_resolved]
     if not files:
@@ -1212,7 +1274,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SnapshotError(f"Unknown default faction '{args.default_faction}'")
 
     try:
-        sources, observations = build_from_files(
+        sources, observations, consumed = build_from_files(
             files,
             defaults,
             args.allow_incomplete,
@@ -1220,6 +1282,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except SnapshotError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not sources:
+        print("No usable Aux or SQL snapshots found.", file=sys.stderr)
         return 1
 
     snapshot_count_by_house: dict[int, int] = defaultdict(int)
@@ -1239,8 +1304,10 @@ def main(argv: list[str] | None = None) -> int:
 
     skipped = sum(source.skipped_listings for source in sources)
     rejected = sum(source.rejected_expansion_ids for source in sources)
-    print(f"Read {len(files)} input file(s).")
+    print(f"Read {len(consumed)} input file(s).")
     print(f"Collected {len(observations)} listing observation(s).")
+    if skipped_accounts:
+        print(f"Skipped {len(skipped_accounts)} account folder(s) without Aux file.")
     if skipped:
         print(f"Skipped {skipped} malformed listing row(s).")
     if rejected:
@@ -1248,7 +1315,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Wrote {len(price_rows)} price stat row(s) to {args.output}.")
     print(f"Wrote {len(listing_rows)} listing stat row(s) to {args.output}.")
     if not args.no_archive:
-        archived = archive_aux_files(files)
+        archived = archive_aux_files(consumed)
         if archived:
             print(f"Archived {len(archived)} plain Aux file(s).")
     return 0

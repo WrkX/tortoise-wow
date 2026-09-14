@@ -416,6 +416,10 @@ class WorldSession
         }
 
         void LogoutPlayer(bool Save);
+        // Request a logout from a packet/map callback. The request is consumed
+        // by the WorldSession update after packet processing, where destroying
+        // the Player is safe.
+        void SchedulePlayerLogout(bool Save);
         // cmangos's 0-arg form (always saves).
         void LogoutPlayer() { LogoutPlayer(true); }
         void KickPlayer();
@@ -1063,6 +1067,15 @@ class WorldSession
         bool m_playerLogout;                                // code processed in LogoutPlayer
         bool m_playerRecentlyLogout;
         bool m_playerSave;
+        enum class ScheduledLogout : uint8
+        {
+            None,
+            Save,
+            NoSave,
+        };
+        // Chat packets may be processed by a map worker; use an atomic request
+        // so the WorldSession update can safely consume it on the world thread.
+        std::atomic<ScheduledLogout> m_scheduledPlayerLogout { ScheduledLogout::None };
         LocaleConstant m_sessionDbcLocale;
         int m_sessionDbLocaleIndex;
         uint32 m_latency;

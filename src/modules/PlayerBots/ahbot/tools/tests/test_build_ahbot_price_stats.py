@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -310,6 +312,62 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertIn("VALUES (2580, 0, 0, 1, 50, 50, 50, 50, 50, 50, 50)", sql)
         self.assertIn("VALUES (754, 5, 0, 1, 400, 400, 400, 400, 400, 400, 400)", sql)
         self.assertIn("VALUES (2580, 0, 0, 1, 1, 1, 2)", sql)
+
+    def test_account_folder_without_aux_is_skipped(self) -> None:
+        empty = self.root / "client" / "WTF" / "Account" / "EMPTY"
+        (empty / "SavedVariables").mkdir(parents=True)
+        (empty / "SavedVariables" / "Turtle_General.lua").write_text(
+            "Turtle_General = {}\n", encoding="utf-8"
+        )
+        write_sql(
+            self.root / "client" / "WTF" / "Account" / "GOOD" / "SavedVariables" / "aux-addon.lua",
+            """aux = {
+  ["ahbot_snapshot"] = {
+    ["server"] = "Medivh",
+    ["faction"] = "Horde",
+    ["complete"] = true,
+    ["expected_auctions"] = 1,
+    ["listings"] = {
+      [1] = { ["item_key"] = "2580:0", ["quantity"] = 1, ["buyout"] = 40 },
+    },
+  },
+}
+""",
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, sql = self.run_builder(str(self.root / "client"))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("Skipping account folder without Aux file:", stderr.getvalue())
+        self.assertIn("EMPTY", stderr.getvalue())
+
+    def test_aux_file_without_snapshot_is_skipped(self) -> None:
+        write_sql(
+            self.root / "WTF" / "Account" / "EMPTY" / "SavedVariables" / "aux-addon.lua",
+            "aux = {\n}\n",
+        )
+        write_sql(
+            self.root / "WTF" / "Account" / "GOOD" / "SavedVariables" / "aux-addon.lua",
+            """aux = {
+  ["ahbot_snapshot"] = {
+    ["server"] = "Medivh",
+    ["faction"] = "Horde",
+    ["complete"] = true,
+    ["expected_auctions"] = 1,
+    ["listings"] = {
+      [1] = { ["item_key"] = "2580:0", ["quantity"] = 1, ["buyout"] = 40 },
+    },
+  },
+}
+""",
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, sql = self.run_builder(str(self.root))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("Skipping Aux file without snapshot or history:", stderr.getvalue())
 
     def test_incomplete_raw_aux_snapshot_is_rejected(self) -> None:
         snapshot = write_sql(
