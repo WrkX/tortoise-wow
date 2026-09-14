@@ -27,6 +27,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: artifacts
+          retention-days: 1
       - name: Determine release version
         id: version
         run: |
