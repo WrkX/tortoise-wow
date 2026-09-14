@@ -13,6 +13,9 @@ namespace ai
     public:
         virtual bool Execute(Event& event) override;
         virtual bool isUsefulWhenStunned() override { return true; }
+        // Learn every level-appropriate spell category regardless of the
+        // optional AiPlayerbot.AutoLearn* configuration switches.
+        void LearnLevelAppropriateSpells();
 
     private: 
         void LearnSpells(std::ostringstream* out);

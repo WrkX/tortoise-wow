@@ -32,6 +32,27 @@ bool AutoLearnSpellAction::Execute(Event& event)
     return true;
 }
 
+void AutoLearnSpellAction::LearnLevelAppropriateSpells()
+{
+    std::ostringstream out;
+    LearnQuestSpells(&out);
+    LearnTrainerSpells(&out);
+#ifdef MANGOSBOT_ZERO
+    LearnDroppedSpells(&out);
+#endif
+
+    if (bot->getClass() == CLASS_HUNTER && bot->GetLevel() >= 10)
+    {
+#if !defined(MANGOSBOT_TWO)
+        bot->learnSpell(5149, false); // Beast Training
+#endif
+        bot->learnSpell(883, false);  // Call Pet
+        bot->learnSpell(982, false);  // Revive Pet
+        bot->learnSpell(6991, false); // Feed Pet
+        bot->learnSpell(1515, false); // Tame Beast
+    }
+}
+
 void AutoLearnSpellAction::LearnSpells(std::ostringstream* out)
 {
     BroadcastHelper::BroadcastLevelup(ai, bot);

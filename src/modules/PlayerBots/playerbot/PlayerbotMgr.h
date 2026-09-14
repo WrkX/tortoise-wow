@@ -50,7 +50,8 @@ public:
     static std::string GetCommandTexts(const std::string& command);
     static std::unordered_map<std::string, std::string> GetCommandTexts();
 
-    void CreateBot(Player* master, const std::string param, std::list<std::string>& messages, ObjectGuid& guid);
+    void CreateBot(Player* master, const std::string param, std::list<std::string>& messages, ObjectGuid& guid,
+        std::string const& creationMarker = "");
     bool DeleteBot(ObjectGuid guid, bool allowInstant = true);
 #ifdef GenerateBotTests
     void DepositTestResult(const std::string& testName, const std::string& result);
@@ -63,6 +64,7 @@ protected:
     virtual uint32 GetOrCreateAccount(Player* master, std::string& error);
     void Cleanup();   
 private:
+    void CancelPendingBotLogin(uint32 guid);
     typedef std::list<std::string> (PlayerbotHolder::*HolderCommandHandler)(Player* master, const std::string param, AccountTypes security);
     typedef std::string (PlayerbotHolder::*BotCommandHandler)(Player* bot, Player* master, const std::string param);
 

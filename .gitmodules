@@ -14,3 +14,7 @@
 	path = modules/mod-crafting-orders
 	url = https://github.com/WrkX/mod-crafting-orders.git
 	branch = main
+
+[submodule "modules/mod-companion-recruiter"]
+	path = modules/mod-companion-recruiter
+	url = https://github.com/WrkX/tortoise-companion-recruiter.git
