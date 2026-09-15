@@ -73,14 +73,14 @@ bool MasterGossipMaintenanceAction::IsEligibleBot(Player* master) const
 
 bool MasterGossipMaintenanceAction::IsDuplicateInteraction(ObjectGuid npcGuid) const
 {
-    uint32 lastNpcGuid = AI_VALUE2(uint32, "manual int", LAST_MASTER_GOSSIP_NPC);
-    time_t nextAllowedTime = AI_VALUE2(time_t, "manual time", LAST_MASTER_GOSSIP_TIME);
+    int32 lastNpcGuid = AI_VALUE2_EXISTS(int32, "manual int", LAST_MASTER_GOSSIP_NPC, 0);
+    time_t nextAllowedTime = AI_VALUE2_EXISTS(time_t, "manual time", LAST_MASTER_GOSSIP_TIME, 0);
 
     return lastNpcGuid == npcGuid.GetCounter() && nextAllowedTime > time(0);
 }
 
 void MasterGossipMaintenanceAction::RememberInteraction(ObjectGuid npcGuid) const
 {
-    SET_AI_VALUE2(uint32, "manual int", LAST_MASTER_GOSSIP_NPC, npcGuid.GetCounter());
+    SET_AI_VALUE2(int32, "manual int", LAST_MASTER_GOSSIP_NPC, static_cast<int32>(npcGuid.GetCounter()));
     SET_AI_VALUE2(time_t, "manual time", LAST_MASTER_GOSSIP_TIME, time(0) + MASTER_GOSSIP_DEBOUNCE_SECONDS);
 }
