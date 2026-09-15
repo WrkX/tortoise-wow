@@ -68,7 +68,7 @@ option(ALLOW_TURTLE_ADDONS "Allow Turtle addons" ON)
 # When ON, mangosd links the bot subsystem; runtime activation is gated by
 # AiPlayerbot.Enabled in aiplayerbot.conf.
 option(BUILD_PLAYERBOTS "Build the cmangos/playerbots subsystem" OFF)
-# Share quest-only and quest-starting loot with eligible group members.
+# Share quest-only loot with eligible group members.
 option(BUILD_GROUP_QUEST_LOOT "Build the GroupQuestLoot core extension module" OFF)
 
 ConfigureModuleBuildOptions()
