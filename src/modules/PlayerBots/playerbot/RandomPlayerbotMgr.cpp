@@ -3894,6 +3894,30 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "login", 0, 0);
     currentBots.remove(bot);
+    m_externallyManaged.erase(bot);
+}
+
+bool RandomPlayerbotMgr::ReleaseQuestFillBot(uint32 lowGuid)
+{
+    if (!IsExternallyManaged(lowGuid))
+        return true;
+
+    Player* bot = GetPlayerBot(lowGuid);
+    if (bot && bot->GetGroup())
+        return false;
+
+    // Keep the character and its random-bot records. Only clear the live
+    // rotation/login events created by AddRandomBot for this quest request.
+    SetEventValue(lowGuid, "add", 0, 0);
+    SetEventValue(lowGuid, "login", 0, 0);
+    SetEventValue(lowGuid, "logout", 0, 0);
+    currentBots.remove(lowGuid);
+    SetExternallyManaged(lowGuid, false);
+
+    if (bot)
+        LogoutPlayerBot(lowGuid);
+
+    return true;
 }
 
 Player* RandomPlayerbotMgr::GetRandomPlayer()

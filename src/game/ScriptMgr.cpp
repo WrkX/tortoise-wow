@@ -3273,6 +3273,28 @@ void Script_SetForcedRole(Player* player, uint8 role)
     });
 }
 
+bool Script_FillQuestListing(Player* leader, uint32 listingId, uint32 questId, uint8 size, bool force)
+{
+    if (!leader)
+        return false;
+
+    return ScriptRegistry<PlayerScript>::ForEachEnabledHookWithReturn(PLAYERHOOK_FILL_QUEST_LISTING, [&](PlayerScript* script)
+    {
+        return script->FillQuestListing(leader, listingId, questId, size, force);
+    });
+}
+
+void Script_CancelQuestListingFill(Player* leader, uint32 listingId)
+{
+    if (!leader)
+        return;
+
+    ScriptRegistry<PlayerScript>::ForEachEnabledHook(PLAYERHOOK_CANCEL_QUEST_LISTING_FILL, [&](PlayerScript* script)
+    {
+        script->CancelQuestListingFill(leader, listingId);
+    });
+}
+
 bool Script_IsMachineDriven(Player const* player)
 {
     if (!player)

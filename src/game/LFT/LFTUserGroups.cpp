@@ -4,6 +4,7 @@
 #include "Group.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "World.h"
 
 #include <algorithm>
@@ -171,6 +172,7 @@ void LFTManager::HandleNewGroup(Player* player, std::vector<std::string> const& 
     {
         if (itr->second.creatorGuid == player->GetObjectGuid())
         {
+            Script_CancelQuestListingFill(player, itr->second.id);
             DeleteListingFromDB(itr->second.id);
             itr = m_listings.erase(itr);
         }
@@ -194,6 +196,8 @@ void LFTManager::HandleNewGroup(Player* player, std::vector<std::string> const& 
     if (listing.category < 1 || listing.category > 4)
         listing.category = 4;
     listing.limit = ParseRoleCounts(fields[4]);
+    listing.createdAt = sWorld.GetGameTime();
+    listing.nextBotFill = listing.createdAt + sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_DELAY);
 
     m_listings[listing.id] = listing;
     SaveListingToDB(m_listings[listing.id]);
@@ -210,9 +214,20 @@ void LFTManager::HandleUpdateGroup(Player* player, std::vector<std::string> cons
     if (!listing || listing->creatorGuid != player->GetObjectGuid())
         return;
 
+    std::array<uint8, 3> const newLimit = ParseRoleCounts(fields[4]);
+    bool const resetBotFill = listing->category == 2 &&
+        (listing->title != fields[2] || listing->description != fields[3] || listing->limit != newLimit);
+    if (resetBotFill)
+    {
+        Script_CancelQuestListingFill(player, listing->id);
+        listing->createdAt = sWorld.GetGameTime();
+        listing->nextBotFill = listing->createdAt + sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_DELAY);
+        listing->botFillStarted = false;
+    }
+
     listing->title = fields[2];
     listing->description = fields[3];
-    listing->limit = ParseRoleCounts(fields[4]);
+    listing->limit = newLimit;
 
     if (fields.size() >= 6)
     {
@@ -273,6 +288,7 @@ void LFTManager::HandleDeleteGroup(Player* player, std::vector<std::string> cons
     if (itr == m_listings.end() || itr->second.creatorGuid != player->GetObjectGuid())
         return;
 
+    Script_CancelQuestListingFill(player, itr->second.id);
     DeleteListingFromDB(itr->second.id);
     m_listings.erase(itr);
     BroadcastGroupsList();
@@ -400,6 +416,11 @@ void LFTManager::LoadListingsFromDB()
         listing.signups[0] = DeserializeSignups(fields[16].GetCppString());
         listing.signups[1] = DeserializeSignups(fields[17].GetCppString());
         listing.signups[2] = DeserializeSignups(fields[18].GetCppString());
+        // Give humans the normal waiting window again after a server restart;
+        // an old persisted timestamp must not jump straight to forced offline
+        // activation as soon as the creator opens LFT.
+        listing.createdAt = sWorld.GetGameTime();
+        listing.nextBotFill = listing.createdAt + sWorld.getConfig(CONFIG_UINT32_LFT_BOTFILL_QUEST_DELAY);
         RecountListing(listing);
 
         m_nextListingId = std::max(m_nextListingId, listing.id + 1);

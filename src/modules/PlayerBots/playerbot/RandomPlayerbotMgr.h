@@ -247,6 +247,11 @@ public:
         {
             return m_externallyManaged.find(lowGuid) != m_externallyManaged.end();
         }
+
+        // Release an ungrouped bot activated specifically for quest filling
+        // without deleting its random-bot roster data. Returns false while a
+        // group still owns the bot.
+        bool ReleaseQuestFillBot(uint32 lowGuid);
     private:
         std::unordered_set<uint32> m_externallyManaged;
     public:

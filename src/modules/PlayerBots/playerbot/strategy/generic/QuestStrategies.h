@@ -3,6 +3,14 @@
 
 namespace ai
 {
+    class SharedQuestAssistTrigger : public Trigger
+    {
+    public:
+        SharedQuestAssistTrigger(PlayerbotAI* ai) : Trigger(ai, "shared quest assist", 5) {}
+
+        bool IsActive() override { return ai->HasRealPlayerMaster(); }
+    };
+
     class QuestStrategy : public PassTroughStrategy
     {
     public:

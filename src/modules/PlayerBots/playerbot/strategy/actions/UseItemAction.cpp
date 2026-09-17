@@ -259,6 +259,19 @@ namespace
                ai->GetAiObjectContext()->GetValue<time_t>("manual time", retryKey)->Get() > time(0);
     }
 
+    bool RelationNeedsIncompleteObjective(const Quest* quest, const QuestStatusData* questStatus, uint32 relationFlags);
+
+    bool IsIncompleteObjectiveForBothPlayers(Player* bot, Player* master, const Quest* quest,
+                                             const QuestStatusData* botStatus, uint32 relationFlags)
+    {
+        if (!bot || !master || !quest || !botStatus ||
+            !RelationNeedsIncompleteObjective(quest, botStatus, relationFlags))
+            return false;
+
+        const QuestStatusData* masterStatus = master->GetQuestStatusData(quest->GetQuestId());
+        return masterStatus && RelationNeedsIncompleteObjective(quest, masterStatus, relationFlags);
+    }
+
     bool HasTargetedOnUseSpell(const ItemPrototype* proto)
     {
         if (!proto)
@@ -538,7 +551,7 @@ namespace
         return false;
     }
 
-    bool HasQuestItemUseForUnitTarget(PlayerbotAI* ai, Player* bot, Item* item, Unit* target, int32 relationEntry, const EntryQuestRelationMap& relationMap)
+    bool HasQuestItemUseForUnitTarget(PlayerbotAI* ai, Player* bot, Player* sharedMaster, Item* item, Unit* target, int32 relationEntry, const EntryQuestRelationMap& relationMap)
     {
         if (!ai || !bot || !item || !target)
             return false;
@@ -567,6 +580,9 @@ namespace
                 continue;
 
             if (!RelationNeedsIncompleteObjective(quest, questStatus, questRelationItr->second))
+                continue;
+
+            if (sharedMaster && !IsIncompleteObjectiveForBothPlayers(bot, sharedMaster, quest, questStatus, questRelationItr->second))
                 continue;
 
             const bool isSourceItem = quest->GetSrcItemId() == proto->ItemId;
@@ -583,7 +599,7 @@ namespace
         return false;
     }
 
-    bool HasQuestItemUseForGameObjectTarget(PlayerbotAI* ai, Player* bot, Item* item, GameObject* target, int32 relationEntry, const EntryQuestRelationMap& relationMap)
+    bool HasQuestItemUseForGameObjectTarget(PlayerbotAI* ai, Player* bot, Player* sharedMaster, Item* item, GameObject* target, int32 relationEntry, const EntryQuestRelationMap& relationMap)
     {
         if (!ai || !bot || !item || !target)
             return false;
@@ -612,6 +628,9 @@ namespace
                 continue;
 
             if (!RelationNeedsIncompleteObjective(quest, questStatus, questRelationItr->second))
+                continue;
+
+            if (sharedMaster && !IsIncompleteObjectiveForBothPlayers(bot, sharedMaster, quest, questStatus, questRelationItr->second))
                 continue;
 
             if (quest->GetSrcItemId() != proto->ItemId)
@@ -640,6 +659,7 @@ namespace
             return candidates;
 
         const EntryQuestRelationMap& relationMap = relationValue->GetReference();
+        Player* sharedMaster = ai->HasRealPlayerMaster() ? ai->GetMaster() : nullptr;
         std::list<Item*> questItems = AI_VALUE2(std::list<Item*>, "inventory items", "quest");
         if (questItems.empty())
             return candidates;
@@ -672,7 +692,7 @@ namespace
                 if (IsQuestItemRetryBlocked(ai, retryKey))
                     continue;
 
-                if (HasQuestItemUseForUnitTarget(ai, bot, item, target, int32(target->GetEntry()), relationMap))
+                if (HasQuestItemUseForUnitTarget(ai, bot, sharedMaster, item, target, int32(target->GetEntry()), relationMap))
                 {
                     candidates.push_back({ item, target, nullptr, retryKey });
                     return candidates;
@@ -689,7 +709,7 @@ namespace
                 if (IsQuestItemRetryBlocked(ai, retryKey))
                     continue;
 
-                if (HasQuestItemUseForUnitTarget(ai, bot, item, target, int32(target->GetEntry()), relationMap))
+                if (HasQuestItemUseForUnitTarget(ai, bot, sharedMaster, item, target, int32(target->GetEntry()), relationMap))
                 {
                     candidates.push_back({ item, target, nullptr, retryKey });
                     return candidates;
@@ -706,7 +726,7 @@ namespace
                 if (IsQuestItemRetryBlocked(ai, retryKey))
                     continue;
 
-                if (HasQuestItemUseForUnitTarget(ai, bot, item, target, int32(target->GetEntry()), relationMap))
+                if (HasQuestItemUseForUnitTarget(ai, bot, sharedMaster, item, target, int32(target->GetEntry()), relationMap))
                 {
                     candidates.push_back({ item, target, nullptr, retryKey });
                     return candidates;
@@ -723,7 +743,7 @@ namespace
                 if (IsQuestItemRetryBlocked(ai, retryKey))
                     continue;
 
-                if (HasQuestItemUseForGameObjectTarget(ai, bot, item, target, -int32(target->GetEntry()), relationMap))
+                if (HasQuestItemUseForGameObjectTarget(ai, bot, sharedMaster, item, target, -int32(target->GetEntry()), relationMap))
                 {
                     candidates.push_back({ item, nullptr, target, retryKey });
                     return candidates;
@@ -732,6 +752,85 @@ namespace
         }
 
         return candidates;
+    }
+
+    bool IsSharedQuestObjectStillNeeded(PlayerbotAI* ai, Player* bot, GameObject* target)
+    {
+        if (!ai || !bot || !target || !ai->HasRealPlayerMaster())
+            return false;
+
+        auto* relationValue = dynamic_cast<SingleCalculatedValue<EntryQuestRelationMap>*>(
+            sSharedObjectContext.GetUntypedValue("entry quest relation"));
+        if (!relationValue)
+            return false;
+
+        auto relationItr = relationValue->GetReference().find(-int32(target->GetEntry()));
+        if (relationItr == relationValue->GetReference().end())
+            return false;
+
+        Player* master = ai->GetMaster();
+        for (const auto& questRelation : relationItr->second)
+        {
+            const Quest* quest = sObjectMgr.GetQuestTemplate(questRelation.first);
+            const QuestStatusData* botStatus = bot->GetQuestStatusData(questRelation.first);
+            if (IsIncompleteObjectiveForBothPlayers(bot, master, quest, botStatus, questRelation.second))
+                return true;
+        }
+
+        return false;
+    }
+
+    bool IsSharedQuestAssistContext(PlayerbotAI* ai, Player* bot)
+    {
+        if (!ai || !bot || !ai->HasRealPlayerMaster() || !bot->IsAlive() || bot->IsInCombat())
+            return false;
+
+        Player* master = ai->GetMaster();
+        if (!master || master == bot || !master->IsInWorld() || !master->IsAlive())
+            return false;
+
+        Group* group = bot->GetGroup();
+        if (!group || !group->IsMember(master->GetObjectGuid()))
+            return false;
+
+        if (bot->GetMapId() != master->GetMapId() || bot->GetInstanceId() != master->GetInstanceId())
+            return false;
+
+        // Do not turn objective discovery into an independent trip.  The
+        // follower must still be in its normal party-follow state and near
+        // the real player; movement remains owned by the follow strategy.
+        return ai->GetAiObjectContext()->GetValue<bool>("following party")->Get() &&
+               sServerFacade.GetDistance2d(bot, master) <= sPlayerbotAIConfig.reactDistance;
+    }
+
+    GameObject* FindNearbySharedQuestObject(PlayerbotAI* ai, Player* bot)
+    {
+        if (!IsSharedQuestAssistContext(ai, bot))
+            return nullptr;
+
+        GameObject* closest = nullptr;
+        float closestDistance = INTERACTION_DISTANCE;
+        for (const GuidPosition& objective : ai->GetAiObjectContext()->GetValue<std::list<GuidPosition>>("active quest objectives")->Get())
+        {
+            if (!objective.IsGameObject())
+                continue;
+
+            GameObject* gameObject = ai->GetGameObject(objective);
+            if (!gameObject || !sServerFacade.isSpawned(gameObject) || gameObject->IsInUse() ||
+                gameObject->GetGoState() != GO_STATE_READY ||
+                !IsSharedQuestObjectStillNeeded(ai, bot, gameObject) ||
+                !bot->GetGameObjectIfCanInteractWith(gameObject->GetObjectGuid(), MAX_GAMEOBJECT_TYPE))
+                continue;
+
+            float distance = bot->GetDistance(gameObject);
+            if (distance > INTERACTION_DISTANCE || distance >= closestDistance)
+                continue;
+
+            closest = gameObject;
+            closestDistance = distance;
+        }
+
+        return closest;
     }
 }
 
@@ -1903,7 +2002,13 @@ bool OpenRandomItemAction::Execute(Event& event)
 
 bool UseRandomQuestItemAction::isUseful()
 {
-    if (ai->HasActivePlayerMaster() || bot->InBattleGround() || bot->IsTaxiFlying())
+    if (bot->InBattleGround() || bot->IsTaxiFlying())
+        return false;
+
+    if (ai->HasRealPlayerMaster())
+        return IsSharedQuestAssistContext(ai, bot) && !CollectQuestItemUseCandidates(ai, bot).empty();
+
+    if (ai->HasActivePlayerMaster())
         return false;
 
     std::list<Item*> questItems = AI_VALUE2(std::list<Item*>, "inventory items", "quest");
@@ -1929,6 +2034,11 @@ bool UseRandomQuestItemAction::isUseful()
 
 bool UseRandomQuestItemAction::Execute(Event& event)
 {
+    // Specific/internal action dispatch can bypass isUseful(). Revalidate the
+    // real-player follower leash before consuming a quest item.
+    if (ai->HasRealPlayerMaster() && !IsSharedQuestAssistContext(ai, bot))
+        return false;
+
     Player* requester = event.getOwner() ? event.getOwner() : GetMaster();
     std::vector<QuestItemUseCandidate> candidates = CollectQuestItemUseCandidates(ai, bot);
 
@@ -1943,8 +2053,17 @@ bool UseRandomQuestItemAction::Execute(Event& event)
 
         context->GetValue<time_t>("manual time", candidate.retryKey)->Set(
             success ? time_t(0) : time(0) + QUEST_ITEM_RETRY_SECONDS);
+
+        if (success && ai->HasRealPlayerMaster())
+        {
+            uint32 targetEntry = candidate.goTarget ? candidate.goTarget->GetEntry() :
+                                 (candidate.unitTarget ? candidate.unitTarget->GetEntry() : 0);
+            sPlayerbotAIConfig.logEvent(ai, "SharedQuestItemUseAction",
+                                        candidate.item->GetProto()->Name1,
+                                        std::to_string(targetEntry));
+        }
     }
-    else
+    else if (!ai->HasRealPlayerMaster())
     {
         std::list<Item*> questItems = AI_VALUE2(std::list<Item*>, "inventory items", "quest");
         for (Item* questItem : questItems)
@@ -1966,6 +2085,30 @@ bool UseRandomQuestItemAction::Execute(Event& event)
     if (success)
     {
         SetDuration(sPlayerbotAIConfig.globalCoolDown);
+    }
+
+    return success;
+}
+
+bool UseSharedQuestObjectAction::isUseful()
+{
+    return FindNearbySharedQuestObject(ai, bot) != nullptr;
+}
+
+bool UseSharedQuestObjectAction::Execute(Event& event)
+{
+    GameObject* gameObject = FindNearbySharedQuestObject(ai, bot);
+    if (!gameObject)
+        return false;
+
+    Player* requester = event.getOwner() ? event.getOwner() : GetMaster();
+    Event useEvent("use game object", gameObject->GetObjectGuid(), requester);
+    bool success = UseGameObject(requester, useEvent, gameObject);
+    if (success)
+    {
+        SetDuration(sPlayerbotAIConfig.globalCoolDown);
+        sPlayerbotAIConfig.logEvent(ai, "SharedQuestObjectUseAction", gameObject->GetName(),
+                                    std::to_string(gameObject->GetEntry()));
     }
 
     return success;
