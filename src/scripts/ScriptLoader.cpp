@@ -22,6 +22,7 @@ void AddSC_event_fireworks();
 void AddSC_elemental_invasions();
 
 // Items
+void AddSC_item_donation_mark();
 void AddSC_item_orb_of_draconic_energy();
 
 // HT
@@ -408,6 +409,7 @@ void AddScripts()
     AddSC_elemental_invasions();
 
     // Items
+    AddSC_item_donation_mark();
     AddSC_item_orb_of_draconic_energy();
 
     // HT

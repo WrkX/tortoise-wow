@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -82,11 +84,11 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertIn("INSERT INTO `ahbot_listing_stats`", sql)
         self.assertNotIn("ahbot_custom_price_stats", sql)
         self.assertIn(
-            "VALUES (2580, 0, 1, 10, 10, 10, 30, 50, 80, 90, 100)",
+            "VALUES (2580, 0, 0, 10, 10, 10, 30, 50, 80, 90, 100)",
             sql,
         )
 
-    def test_multiple_servers_are_aggregated_per_faction(self) -> None:
+    def test_multiple_servers_and_factions_are_aggregated_shared(self) -> None:
         nord = write_sql(
             self.root / "nordanaar" / "alliance" / "2026-09-01.sql",
             "-- AHBOT_SNAPSHOT server=nordanaar faction=alliance date=2026-09-01\n"
@@ -105,8 +107,8 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(nord), str(tel), str(horde))
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 3, 100, 100, 100, 300, 500, 500, 500)", sql)
-        self.assertIn("VALUES (2580, 0, 6, 1, 9000, 9000, 9000, 9000, 9000, 9000, 9000)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 4, 100, 100, 100, 300, 500, 9000, 9000)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 3, 1, 3, 4)", sql)
         self.assertIn("nordanaar", sql)
         self.assertIn("telabim", sql)
 
@@ -133,10 +135,10 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertIn(
             "INSERT INTO `ahbot_listing_stats` "
             "(`item_id`, `suffix_id`, `auction_house`, `snapshot_count`, `days_seen`, "
-            "`seen_count`, `listing_count`) VALUES (2580, 0, 1, 3, 2, 2, 3)",
+            "`seen_count`, `listing_count`) VALUES (2580, 0, 0, 3, 2, 2, 3)",
             sql,
         )
-        self.assertNotIn("VALUES (2580, 0, 1, 4,", sql)
+        self.assertNotIn("VALUES (2580, 0, 0, 4,", sql)
 
     def test_duplicate_rows_count_as_separate_listings(self) -> None:
         snapshot = write_sql(
@@ -147,8 +149,8 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 2, 40, 40, 40, 40, 40, 40, 40)", sql)
-        self.assertIn("VALUES (2580, 0, 1, 1, 1, 1, 2)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 2, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 1, 1, 2)", sql)
 
     def test_suffix_ids_are_not_merged_with_base_item(self) -> None:
         snapshot = write_sql(
@@ -160,9 +162,9 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (754, 0, 1, 1, 100, 100, 100, 100, 100, 100, 100)", sql)
-        self.assertIn("VALUES (754, 5, 1, 2, 400, 400, 400, 400, 400, 400, 400)", sql)
-        self.assertIn("DELETE FROM `ahbot_price` WHERE `item` = '754' AND `auction_house` = '1';", sql)
+        self.assertIn("VALUES (754, 0, 0, 1, 100, 100, 100, 100, 100, 100, 100)", sql)
+        self.assertIn("VALUES (754, 5, 0, 2, 400, 400, 400, 400, 400, 400, 400)", sql)
+        self.assertIn("DELETE FROM `ahbot_price` WHERE `item` = '754' AND `auction_house` = '0';", sql)
         self.assertNotIn("WHERE `item` = '754:5'", sql)
 
     def test_malformed_rows_are_skipped(self) -> None:
@@ -177,7 +179,7 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot), "--allow-incomplete")
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 1, 25, 25, 25, 25, 25, 25, 25)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 25, 25, 25, 25, 25, 25, 25)", sql)
         self.assertNotIn("99", sql.split("ahbot_price_stats", 1)[-1].split("ahbot_price", 1)[0])
 
     def test_legacy_private_project_insert_lines(self) -> None:
@@ -195,8 +197,8 @@ class BuilderEndToEndTests(unittest.TestCase):
             "nordanaar",
         )
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 1, 3999, 3999, 3999, 3999, 3999, 3999, 3999)", sql)
-        self.assertIn("VALUES (2770, 0, 1, 2, 50, 50, 50, 50, 70, 70, 70)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 3999, 3999, 3999, 3999, 3999, 3999, 3999)", sql)
+        self.assertIn("VALUES (2770, 0, 0, 2, 50, 50, 50, 50, 70, 70, 70)", sql)
 
     def test_deterministic_output(self) -> None:
         first = write_sql(
@@ -258,14 +260,14 @@ class BuilderEndToEndTests(unittest.TestCase):
         code, _sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 1)
 
-    def test_missing_faction_fails_before_generating_house_zero(self) -> None:
+    def test_missing_faction_still_generates_shared_market(self) -> None:
         snapshot = write_sql(
             self.root / "snapshot.sql",
             "INSERT INTO `ahbot_custom_prices` (`item_id`, `price`) VALUES (2580, 40);\n",
         )
         code, sql = self.run_builder(str(snapshot))
-        self.assertEqual(code, 1)
-        self.assertEqual(sql, "")
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
 
     def test_empty_snapshot_requires_explicit_zero_count(self) -> None:
         snapshot = write_sql(
@@ -286,6 +288,96 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertIn("TRUNCATE TABLE `ahbot_price_stats`;", sql)
         self.assertIn("VALUES (1,", sql)
 
+    def test_raw_aux_full_snapshot_counts_no_buyout_rows(self) -> None:
+        snapshot = write_sql(
+            self.root / "SavedVariables" / "aux-addon.lua",
+            """aux = {
+  ["ahbot_snapshot"] = {
+    ["server"] = "Medivh",
+    ["faction"] = "Horde",
+    ["scan_time"] = 1788904800,
+    ["complete"] = true,
+    ["expected_auctions"] = 3,
+    ["listings"] = {
+      [1] = { ["item_key"] = "2580:0", ["quantity"] = 2, ["buyout"] = 100 },
+      [2] = { ["item_key"] = "2580:0", ["quantity"] = 1, ["buyout"] = 0 },
+      [3] = { ["item_key"] = "754:5", ["quantity"] = 1, ["buyout"] = 400 },
+    },
+  },
+}
+""",
+        )
+        code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 50, 50, 50, 50, 50, 50, 50)", sql)
+        self.assertIn("VALUES (754, 5, 0, 1, 400, 400, 400, 400, 400, 400, 400)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 1, 1, 2)", sql)
+
+    def test_account_folder_without_aux_is_skipped(self) -> None:
+        empty = self.root / "client" / "WTF" / "Account" / "EMPTY"
+        (empty / "SavedVariables").mkdir(parents=True)
+        (empty / "SavedVariables" / "Turtle_General.lua").write_text(
+            "Turtle_General = {}\n", encoding="utf-8"
+        )
+        write_sql(
+            self.root / "client" / "WTF" / "Account" / "GOOD" / "SavedVariables" / "aux-addon.lua",
+            """aux = {
+  ["ahbot_snapshot"] = {
+    ["server"] = "Medivh",
+    ["faction"] = "Horde",
+    ["complete"] = true,
+    ["expected_auctions"] = 1,
+    ["listings"] = {
+      [1] = { ["item_key"] = "2580:0", ["quantity"] = 1, ["buyout"] = 40 },
+    },
+  },
+}
+""",
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, sql = self.run_builder(str(self.root / "client"))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("Skipping account folder without Aux file:", stderr.getvalue())
+        self.assertIn("EMPTY", stderr.getvalue())
+
+    def test_aux_file_without_snapshot_is_skipped(self) -> None:
+        write_sql(
+            self.root / "WTF" / "Account" / "EMPTY" / "SavedVariables" / "aux-addon.lua",
+            "aux = {\n}\n",
+        )
+        write_sql(
+            self.root / "WTF" / "Account" / "GOOD" / "SavedVariables" / "aux-addon.lua",
+            """aux = {
+  ["ahbot_snapshot"] = {
+    ["server"] = "Medivh",
+    ["faction"] = "Horde",
+    ["complete"] = true,
+    ["expected_auctions"] = 1,
+    ["listings"] = {
+      [1] = { ["item_key"] = "2580:0", ["quantity"] = 1, ["buyout"] = 40 },
+    },
+  },
+}
+""",
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, sql = self.run_builder(str(self.root))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("Skipping Aux file without snapshot or history:", stderr.getvalue())
+
+    def test_incomplete_raw_aux_snapshot_is_rejected(self) -> None:
+        snapshot = write_sql(
+            self.root / "SavedVariables" / "aux-addon.lua",
+            "aux = { [\"ahbot_snapshot\"] = { [\"complete\"] = false, [\"expected_auctions\"] = 1, [\"listings\"] = {} } }",
+        )
+        code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 1)
+        self.assertEqual(sql, "")
+
     def test_turtle_custom_ids_in_expansion_numeric_gap_are_kept(self) -> None:
         snapshot = write_sql(
             self.root / "nordanaar_alliance_2026-09-01.sql",
@@ -296,9 +388,9 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
-        self.assertIn("VALUES (42287, 0, 1, 1, 50000, 50000, 50000, 50000, 50000, 50000, 50000)", sql)
-        self.assertIn("VALUES (55371, 0, 1, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (42287, 0, 0, 1, 50000, 50000, 50000, 50000, 50000, 50000, 50000)", sql)
+        self.assertIn("VALUES (55371, 0, 0, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
 
     def test_reject_expansion_ids_drops_gap_including_turtle_customs(self) -> None:
         snapshot = write_sql(
@@ -311,8 +403,8 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot), "--reject-expansion-ids")
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
-        self.assertIn("VALUES (55371, 0, 1, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (55371, 0, 0, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
         self.assertNotIn("37650", sql)
         self.assertNotIn("42287", sql)
 
@@ -326,9 +418,9 @@ class BuilderEndToEndTests(unittest.TestCase):
         )
         code, sql = self.run_builder(str(snapshot))
         self.assertEqual(code, 0)
-        self.assertIn("VALUES (2580, 0, 1, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
-        self.assertIn("VALUES (37650, 0, 1, 1, 999, 999, 999, 999, 999, 999, 999)", sql)
-        self.assertIn("VALUES (55371, 0, 1, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("VALUES (37650, 0, 0, 1, 999, 999, 999, 999, 999, 999, 999)", sql)
+        self.assertIn("VALUES (55371, 0, 0, 1, 80, 80, 80, 80, 80, 80, 80)", sql)
 
     def test_schema_charset_matches_repo(self) -> None:
         schema = (

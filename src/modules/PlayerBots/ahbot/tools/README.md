@@ -4,21 +4,21 @@ For a short, implementation-neutral handoff to another agent, see
 [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
 
 Builds percentile and availability SQL for Turtle WoW (Vanilla) auction houses
-from daily Aux-derived dumps. Apply the generated file to the **characters**
+from raw Aux SavedVariables or legacy SQL dumps. Apply the generated file to the **characters**
 database (`tw_char`). The C++ AhBot runtime reads the same tables from
 `CharacterDatabase`.
 
-Two Turtle servers are supported in one build: **Nordanaar** and **Tel'Abim**.
-Alliance, Horde, and Neutral (goblin) houses stay separate (`auction_house` 1 / 6 / 7,
-matching `AhBot.cpp`). Prices from both servers are pooled per house so sample
-size grows; each input file is still recorded in `ahbot_market_snapshot_source`.
+Every input server, date, and faction is pooled into one faction-neutral market
+(`auction_house = 0`). Physical houses 1/6/7 remain operational; the runtime
+falls back to shared rows for prices and listing statistics. Each source is
+still recorded with server/faction provenance.
 
 ## Tables (characters database)
 
 | Table | Role |
 | --- | --- |
-| `ahbot_price_stats` | Per `(item_id, suffix_id, auction_house)` percentiles |
-| `ahbot_listing_stats` | Presence vs listing counts for the same key |
+| `ahbot_price_stats` | Shared `(item_id, suffix_id, 0)` percentiles |
+| `ahbot_listing_stats` | Shared item presence and listing counts |
 | `ahbot_market_snapshot_source` | Provenance for each snapshot file |
 | `ahbot_price` | Optional unsuffixed medians for the existing `GetMarketPrice` query |
 | `ahbot_house_target` | Runtime daily population targets (not written by this tool) |
@@ -30,19 +30,18 @@ Do not create a second copy of these tables in the world database.
 
 ## Daily workflow (fresh Aux DB, both servers)
 
-Keep a history directory. Each day, dump that day's Aux auction database to SQL
-and **leave previous days in place** — the builder aggregates the whole window.
+Put this script in `D:\twmoa_1181_cn` and run it without arguments. It recursively
+finds every `WTF\Account\*\SavedVariables\aux-addon*.lua` and `.lua.bak` file
+across both clients. Plain `.lua` files are renamed after successful generation
+to `aux-addon_YYYYMMDD_NN.lua.bak`; existing backups remain inputs. All inputs
+are intentionally retained, including duplicates from different clients.
 
 Suggested layout:
 
 ```
-snapshots/
-  nordanaar/alliance/2026-09-07.sql
-  nordanaar/horde/2026-09-07.sql
-  nordanaar/neutral/2026-09-07.sql
-  telabim/alliance/2026-09-07.sql
-  telabim/horde/2026-09-07.sql
-  telabim/neutral/2026-09-07.sql
+clients/
+  twmoa_1181/WTF/Account/<account>/SavedVariables/aux-addon.lua
+  twmoa_1181 - Copy/WTF/Account/<account>/SavedVariables/aux-addon_*.lua.bak
 ```
 
 Server, faction, and date are taken from `AHBOT_SNAPSHOT` metadata when present,
@@ -52,10 +51,7 @@ otherwise from the path/filename (`nordanaar`, `telabim`, `alliance`, `horde`,
 Rebuild and load:
 
 ```sh
-python3 src/modules/PlayerBots/ahbot/tools/build_ahbot_price_stats.py \
-  snapshots/nordanaar snapshots/telabim \
-  --recursive \
-  -o ahbot_market_stats.generated.sql
+python build_ahbot_price_stats.py -o ahbot_market_stats.generated.sql
 
 mysql -u mangos -p tw_char < src/modules/PlayerBots/sql/characters/ai_playerbot_ahbot_market_stats.sql
 mysql -u mangos -p tw_char < ahbot_market_stats.generated.sql
@@ -84,9 +80,13 @@ Header (optional, validated when present):
 If `complete=0` or `expected_listings` does not match the number of accepted
 rows, the build exits unless you pass `--allow-incomplete`.
 
-The builder also refuses files with an unknown faction or zero parsed listings,
-because the default refresh truncates the existing stats. To represent a
-genuinely empty auction-house scan, declare `expected_listings=0` explicitly.
+Raw Aux full scans are accepted only when marked complete and their expected
+auction count matches the captured rows. Incomplete scans are rejected unless
+`--allow-incomplete` is supplied. Legacy Aux daily-minimum history is accepted
+as the fallback when no full scan is present.
+
+The addon command `/aux ahbot scan` performs an unfiltered, paginated full scan
+and stores it in `aux.ahbot_snapshot` for the builder.
 
 Turtle listing rows (per-unit copper). `buyout` + `quantity` is accepted and
 converted with integer division:
@@ -111,11 +111,21 @@ customs from TBC/WotLK ids, so it is opt-in: `--reject-expansion-ids` drops
 
 ## Availability vs listings
 
-`listing_count` is how many listing rows were observed (dump size / stacks).
+`listing_count` is how many individual listing rows were observed, including
+rows without a buyout (which contribute to frequency but not price statistics).
 `seen_count` is how many snapshot files contained the item (presence).
 `days_seen` is how many distinct calendar days it appeared. A missing day in
 the middle of the window does not create a phantom snapshot; `snapshot_count`
-is the number of files for that auction house.
+is the number of source snapshots in the shared market.
+
+## Daily population target
+
+Set `AhBot.Shared.MinItems` and `AhBot.Shared.MaxItems` to configure one daily
+market target. The server rolls and persists one target in
+`ahbot_house_target` (house `0`), then fills the combined physical houses
+toward it. `ItemsPerCycle`, category/item caps, expiration, and seller cooldowns
+remain additional safeguards. Legacy per-house settings are used only when
+the shared range is left at `0/0`.
 
 ## Tests
 

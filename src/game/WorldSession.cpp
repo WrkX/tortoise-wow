@@ -485,6 +485,10 @@ bool WorldSession::Update(PacketFilter& updater)
     //logout procedure should happen only in World::UpdateSessions() method!!!
     if (updater.ProcessLogout())
     {
+        ScheduledLogout const scheduledLogout = m_scheduledPlayerLogout.exchange(ScheduledLogout::None, std::memory_order_acq_rel);
+        if (scheduledLogout != ScheduledLogout::None)
+            LogoutPlayer(scheduledLogout == ScheduledLogout::Save);
+
         // Penqle stub's m_bot/PB_STATE_OFFLINE early-logout removed. cmangos
         // adds its own logout handling for offline bots 
         if (_clientHashComputeStep == HASH_COMPUTED && GetPlayer())
@@ -729,6 +733,11 @@ bool WorldSession::UpdateDisconnected(uint32 diff)
         return false; // Delete this session
     m_disconnectTimer -= diff;
     return true;
+}
+
+void WorldSession::SchedulePlayerLogout(bool Save)
+{
+    m_scheduledPlayerLogout.store(Save ? ScheduledLogout::Save : ScheduledLogout::NoSave, std::memory_order_release);
 }
 
 /// %Log the player out

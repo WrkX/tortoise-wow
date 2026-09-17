@@ -99,7 +99,7 @@ double PricingStrategy::GetMarketPrice(uint32 itemId, uint32 auctionHouse)
     if (auctionbot.TryGetCachedMarketPrice(itemId, auctionHouse, marketPrice))
         return RoundPrice(marketPrice);
 
-    auto results = CharacterDatabase.PQuery("SELECT price FROM ahbot_price WHERE item = '%u' AND auction_house = '%u'", itemId, auctionHouse);
+    auto results = CharacterDatabase.PQuery("SELECT price FROM ahbot_price WHERE item = '%u' AND auction_house IN ('%u', '0') ORDER BY auction_house = '%u' DESC LIMIT 1", itemId, auctionHouse, auctionHouse);
     std::unique_ptr<QueryResult> results_guard(results);
     if (results)
     {

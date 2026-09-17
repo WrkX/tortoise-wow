@@ -206,6 +206,25 @@ void AhBot::ForceUpdate(bool simulate)
 	CheckCategoryMultipliers();
 
 	int answered = 0, added = 0;
+    const bool sharedPopulation = sAhBotConfig.sharedMinItems || sAhBotConfig.sharedMaxItems;
+    uint32 sharedTarget = 0;
+    int sharedRemaining = 0;
+    if (sharedPopulation)
+    {
+        uint32 sharedCurrentCount = 0;
+        for (int h = 0; h < MAX_AUCTIONS; ++h)
+        {
+            const AuctionHouseEntry* sharedAhEntry = sAuctionHouseStore.LookupEntry(auctionIds[h]);
+            if (sharedAhEntry)
+                sharedCurrentCount += (uint32)sAuctionMgr.GetAuctionsMap(sharedAhEntry)->GetAuctionsSnapshot().size();
+        }
+        sharedTarget = ResolveHouseTarget(0, sharedCurrentCount);
+        sharedRemaining = (int)ItemsToPostThisCycle(sharedCurrentCount, sharedTarget, sAhBotConfig.itemsPerCycle);
+        if (sharedTarget == 0 && sAhBotConfig.itemsPerCycle == 0)
+            sharedRemaining = 0x7fffffff;
+        else if (sharedTarget == 0 && sAhBotConfig.itemsPerCycle > 0)
+            sharedRemaining = (int)sAhBotConfig.itemsPerCycle;
+    }
 	for (int i = 0; i < MAX_AUCTIONS; i++)
 	{
         if (sWorld.IsShutdowning() || sWorld.IsStopped())
@@ -232,12 +251,18 @@ void AhBot::ForceUpdate(bool simulate)
 
         if (sAhBotConfig.sellerEnabled)
         {
-            uint32 target = ResolveHouseTarget(i, index.totalCount);
-            int remaining = (int)ItemsToPostThisCycle(index.totalCount, target, sAhBotConfig.itemsPerCycle);
-            if (target == 0 && sAhBotConfig.itemsPerCycle == 0)
-                remaining = 0x7fffffff;
-            else if (target == 0 && sAhBotConfig.itemsPerCycle > 0)
-                remaining = (int)sAhBotConfig.itemsPerCycle;
+            uint32 target = sharedPopulation ? sharedTarget : ResolveHouseTarget(i, index.totalCount);
+            int remaining;
+            if (sharedPopulation)
+                remaining = sharedRemaining;
+            else
+            {
+                remaining = (int)ItemsToPostThisCycle(index.totalCount, target, sAhBotConfig.itemsPerCycle);
+                if (target == 0 && sAhBotConfig.itemsPerCycle == 0)
+                    remaining = 0x7fffffff;
+                else if (target == 0 && sAhBotConfig.itemsPerCycle > 0)
+                    remaining = (int)sAhBotConfig.itemsPerCycle;
+            }
 
             if (sAhBotConfig.realismDebug)
                 sLog.outString("[AhBot] House %u: listings=%u target=%u remainingThisCycle=%d",
@@ -273,6 +298,8 @@ void AhBot::ForceUpdate(bool simulate)
                     ahAdded += AddAuctions(i, category, &inAuctionItems, index, remaining);
                 }
             }
+            if (sharedPopulation)
+                sharedRemaining = remaining;
         }
 
 		sLog.outString("[AhBot] Auction house id=%u: answered=%d added=%d", auctionIds[i], ahAnswered, ahAdded);
@@ -833,14 +860,25 @@ int AhBot::AddAuctions(int auction, Category* category, ItemBag* inAuctionItems,
             ItemStatKey key = MakeStatKey(itemId, 0, auctionIds[auction]);
             std::map<ItemStatKey, uint32>::const_iterator seenIt = cycleCache.listingSeen.find(key);
             std::map<ItemStatKey, uint32>::const_iterator snapIt = cycleCache.listingSnapshots.find(key);
+            std::map<ItemStatKey, uint32>::const_iterator countIt = cycleCache.listingCounts.find(key);
+            if (seenIt == cycleCache.listingSeen.end() || snapIt == cycleCache.listingSnapshots.end())
+            {
+                key = MakeStatKey(itemId, 0, 0);
+                seenIt = cycleCache.listingSeen.find(key);
+                snapIt = cycleCache.listingSnapshots.find(key);
+                countIt = cycleCache.listingCounts.find(key);
+            }
             uint32 seen = seenIt == cycleCache.listingSeen.end() ? 0 : seenIt->second;
             uint32 snaps = snapIt == cycleCache.listingSnapshots.end() ? 0 : snapIt->second;
-            float weight = sAhBotConfig.listingStatsFallbackWeight;
+            uint32 listingCount = countIt == cycleCache.listingCounts.end() ? 0 : countIt->second;
+            float frequency = listingCount ? (float)listingCount : sAhBotConfig.listingStatsFallbackWeight;
+            float scarcity = 1.0f;
             if (seen >= sAhBotConfig.listingStatsMinSeenCount && snaps > 0)
             {
                 float pct = (float)seen / (float)snaps;
-                weight = std::pow(pct, sAhBotConfig.listingStatsScarcityExponent);
+                scarcity = std::pow(pct, sAhBotConfig.listingStatsScarcityExponent);
             }
+            float weight = frequency * scarcity;
             uint32 copies = std::max<uint32>(1, (uint32)std::ceil(weight * 10.0f));
             for (uint32 n = 0; n < copies && weighted.size() < available.size() * 4; ++n)
                 weighted.push_back(itemId);
@@ -1414,7 +1452,7 @@ void AhBot::updateMarketPrice(uint32 itemId, double price, uint32 auctionHouse)
 
     if (marketPrice == 0)
     {
-        auto results = CharacterDatabase.PQuery("SELECT price FROM ahbot_price WHERE item = '%u' AND auction_house = '%u'", itemId, auctionHouse);
+        auto results = CharacterDatabase.PQuery("SELECT price FROM ahbot_price WHERE item = '%u' AND auction_house IN ('%u', '0') ORDER BY auction_house = '%u' DESC LIMIT 1", itemId, auctionHouse, auctionHouse);
         std::unique_ptr<QueryResult> results_guard(results);
         if (results)
             marketPrice = results->Fetch()[0].GetFloat();
@@ -1946,8 +1984,9 @@ void AhBot::PrintStatus(ChatHandler* handler)
         uint32 target = 0;
         {
             std::lock_guard<std::mutex> g(cacheMutex);
-            if (houseTargets.count(auctionIds[i]))
-                target = houseTargets[auctionIds[i]];
+            uint32 targetKey = (sAhBotConfig.sharedMinItems || sAhBotConfig.sharedMaxItems) ? 0 : auctionIds[i];
+            if (houseTargets.count(targetKey))
+                target = houseTargets[targetKey];
         }
         std::ostringstream house;
         house << "house " << auctionIds[i] << " listings=" << count << " dailyTarget=" << target
@@ -2123,7 +2162,7 @@ void AhBot::LoadCycleCache()
     if (sAhBotConfig.listingStatsEnabled)
     {
         if (auto results = CharacterDatabase.PQuery(
-                "SELECT item_id, suffix_id, auction_house, snapshot_count, seen_count FROM ahbot_listing_stats"))
+                "SELECT item_id, suffix_id, auction_house, snapshot_count, seen_count, listing_count FROM ahbot_listing_stats"))
         {
             std::unique_ptr<QueryResult> guard(results);
             do
@@ -2135,6 +2174,7 @@ void AhBot::LoadCycleCache()
                 key.auctionHouse = fields[2].GetUInt32();
                 next.listingSnapshots[key] = fields[3].GetUInt32();
                 next.listingSeen[key] = fields[4].GetUInt32();
+                next.listingCounts[key] = fields[5].GetUInt32();
             } while (results->NextRow());
             next.listingStatRows = next.listingSeen.size();
         }
@@ -2184,6 +2224,8 @@ HouseSnapshotIndex AhBot::BuildHouseIndex(const std::vector<AuctionSnapshot>& sn
 
 uint32 AhBot::GetHouseMinItems(int auction) const
 {
+    if (sAhBotConfig.sharedMinItems || sAhBotConfig.sharedMaxItems)
+        return sAhBotConfig.sharedMinItems;
     if (auction == 0) return sAhBotConfig.allianceMinItems;
     if (auction == 1) return sAhBotConfig.hordeMinItems;
     return sAhBotConfig.neutralMinItems;
@@ -2191,6 +2233,8 @@ uint32 AhBot::GetHouseMinItems(int auction) const
 
 uint32 AhBot::GetHouseMaxItems(int auction) const
 {
+    if (sAhBotConfig.sharedMinItems || sAhBotConfig.sharedMaxItems)
+        return sAhBotConfig.sharedMaxItems;
     if (auction == 0) return sAhBotConfig.allianceMaxItems;
     if (auction == 1) return sAhBotConfig.hordeMaxItems;
     return sAhBotConfig.neutralMaxItems;
@@ -2198,6 +2242,8 @@ uint32 AhBot::GetHouseMaxItems(int auction) const
 
 uint32 AhBot::GetHouseTargetPercent(int auction) const
 {
+    if (sAhBotConfig.sharedMinItems || sAhBotConfig.sharedMaxItems)
+        return sAhBotConfig.sharedTargetPercent;
     if (auction == 0) return sAhBotConfig.allianceTargetPercent;
     if (auction == 1) return sAhBotConfig.hordeTargetPercent;
     return sAhBotConfig.neutralTargetPercent;
@@ -2211,7 +2257,9 @@ uint32 AhBot::ResolveHouseTarget(int auction, uint32 currentCount)
     if (minItems == 0 && maxItems == 0)
         return 0;
 
-    uint32 houseId = auctionIds[auction];
+    // Shared population uses one persisted target for the whole market. The
+    // physical house ids are still used for actual auction operations.
+    uint32 houseId = (sAhBotConfig.sharedMinItems || sAhBotConfig.sharedMaxItems) ? 0 : auctionIds[auction];
     int32 today = (int32)(time(0) / 86400);
     uint32 savedTarget = 0;
     int32 savedDay = -1;
@@ -2340,6 +2388,8 @@ bool AhBot::TryGetCachedMarketPrice(uint32 itemId, uint32 auctionHouse, double& 
     if (!cycleCache.valid)
         return false;
     std::map<uint64, double>::const_iterator it = cycleCache.marketPrices.find(CacheKey(itemId, auctionHouse));
+    if (it == cycleCache.marketPrices.end() && auctionHouse != 0)
+        it = cycleCache.marketPrices.find(CacheKey(itemId, 0));
     if (it == cycleCache.marketPrices.end())
         return false;
     outPrice = it->second;
@@ -2375,8 +2425,12 @@ bool AhBot::TryGetPriceStats(uint32 itemId, uint32 auctionHouse, PricePercentile
         return false;
     ItemStatKey exact = MakeStatKey(itemId, suffixId, auctionHouse);
     std::map<ItemStatKey, PricePercentiles>::const_iterator it = cycleCache.priceStats.find(exact);
+    if (it == cycleCache.priceStats.end() && auctionHouse != 0)
+        it = cycleCache.priceStats.find(MakeStatKey(itemId, suffixId, 0));
     if (it == cycleCache.priceStats.end() && suffixId != 0)
         it = cycleCache.priceStats.find(MakeStatKey(itemId, 0, auctionHouse));
+    if (it == cycleCache.priceStats.end() && suffixId != 0 && auctionHouse != 0)
+        it = cycleCache.priceStats.find(MakeStatKey(itemId, 0, 0));
     if (it == cycleCache.priceStats.end())
         return false;
     outStats = it->second;

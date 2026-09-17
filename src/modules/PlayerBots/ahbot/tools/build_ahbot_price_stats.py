@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Build Turtle/Vanilla AHBot market-stats SQL from daily Aux snapshots.
+"""Build Turtle/Vanilla AHBot market-stats SQL from Aux snapshots.
 
-Reads daily SQL dumps produced from Aux (or legacy ahbot_custom_prices INSERT
-lines), aggregates nearest-rank percentiles and availability, and emits
-idempotent SQL for the characters-database tables next to ahbot_price.
+Reads raw ``aux-addon*.lua`` SavedVariables files as well as legacy SQL dumps,
+aggregates nearest-rank percentiles and listing availability, and emits
+idempotent SQL for the characters-database tables next to ahbot_price. All
+generated market rows intentionally use auction_house=0: the C++ runtime uses
+that row as the shared-market fallback for physical houses 1/6/7.
 
 Presence frequency (days_seen / seen_count) is tracked separately from
-listing_count. Item ids are kept by default so Turtle custom entries in
-24284-49999 are not discarded; pass --reject-expansion-ids only when ingesting
-a known WotLK dump.
+listing_count. Account folders under WTF/Account without an Aux SavedVariables
+file are skipped; Aux files with neither a full snapshot nor legacy history are
+skipped instead of aborting the build. Item ids are kept by default so Turtle
+custom entries in 24284-49999 are not discarded; pass --reject-expansion-ids
+only when ingesting a known WotLK dump.
 """
 
 from __future__ import annotations
@@ -22,7 +26,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-# House ids written by AhBot.cpp (auctionIds = {1, 6, 7}).
+# Generated market rows use one shared house. Physical houses remain 1/6/7 in
+# the runtime and are deliberately not a market-statistics dimension.
+SHARED_AUCTION_HOUSE = 0
 AUCTION_HOUSE_ALLIANCE = 1
 AUCTION_HOUSE_HORDE = 6
 AUCTION_HOUSE_NEUTRAL = 7
@@ -147,7 +153,7 @@ class Observation:
     item_id: int
     suffix_id: int
     auction_house: int
-    unit_price: int
+    unit_price: int | None
     source_id: int
     snapshot_date: date | None
 
@@ -217,7 +223,7 @@ def parse_bool(value: str) -> bool:
 
 def parse_date(value: str) -> date | None:
     text = value.strip()
-    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%d%m%Y"):
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:
@@ -250,6 +256,31 @@ def sql_optional_int(value: int | None) -> str:
     return "NULL" if value is None else str(int(value))
 
 
+AUX_SAVEDVARIABLES_NAME_RE = re.compile(r"aux-addon.*\.lua(?:\.bak)?$")
+
+
+def is_aux_savedvariables_file(path: Path) -> bool:
+    return bool(AUX_SAVEDVARIABLES_NAME_RE.fullmatch(path.name.lower())) and any(
+        part.lower() == "savedvariables" for part in path.parts
+    )
+
+
+def is_account_folder(path: Path) -> bool:
+    parent = path.parent
+    return parent.name.lower() == "account" and parent.parent.name.lower() == "wtf"
+
+
+def account_folder_of(path: Path) -> Path | None:
+    current = path if path.is_dir() else path.parent
+    while True:
+        if is_account_folder(current):
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def collect_sql_files(inputs: list[Path], pattern: str, recursive: bool) -> list[Path]:
     files: list[Path] = []
     for input_path in inputs:
@@ -266,6 +297,58 @@ def collect_sql_files(inputs: list[Path], pattern: str, recursive: bool) -> list
     for path in files:
         unique[path.resolve()] = path
     return sorted(unique.values(), key=lambda path: path.resolve().as_posix())
+
+
+def collect_input_files(
+    inputs: list[Path], pattern: str, recursive: bool
+) -> tuple[list[Path], list[Path]]:
+    """Collect SQL and raw Aux files without deduplicating source contents.
+
+    ``WTF/Account/<name>`` folders that contain no ``aux-addon*.lua`` SavedVariables
+    file are skipped instead of being treated as missing inputs.
+    """
+    files: list[Path] = []
+    skipped_accounts: list[Path] = []
+    for input_path in inputs:
+        if input_path.is_file():
+            files.append(input_path)
+            continue
+        if not input_path.is_dir():
+            raise FileNotFoundError(f"Input path does not exist: {input_path}")
+
+        iterator = input_path.rglob("*") if recursive else input_path.glob("*")
+        found_by_account: dict[Path | None, list[Path]] = defaultdict(list)
+        account_seen: dict[Path, Path] = {}
+
+        if is_account_folder(input_path):
+            account_seen[input_path.resolve()] = input_path
+
+        for path in iterator:
+            if path.is_dir() and is_account_folder(path):
+                account_seen[path.resolve()] = path
+                continue
+            if not path.is_file():
+                continue
+            account = account_folder_of(path)
+            key = account.resolve() if account is not None else None
+            name = path.name.lower()
+            if name.endswith(".sql") and path.match(pattern):
+                found_by_account[key].append(path)
+            elif is_aux_savedvariables_file(path):
+                found_by_account[key].append(path)
+
+        for resolved, account in sorted(account_seen.items(), key=lambda item: item[0].as_posix()):
+            account_files = found_by_account.get(resolved, [])
+            if any(is_aux_savedvariables_file(path) for path in account_files):
+                continue
+            print(f"Skipping account folder without Aux file: {account}", file=sys.stderr)
+            skipped_accounts.append(account)
+            found_by_account.pop(resolved, None)
+
+        for group in found_by_account.values():
+            files.extend(group)
+
+    return sorted(files, key=lambda path: path.resolve().as_posix()), skipped_accounts
 
 
 def infer_meta_from_path(path: Path, defaults: SnapshotMeta) -> SnapshotMeta:
@@ -565,7 +648,7 @@ def read_snapshot_file(
                 continue
             parsed, skip_count, reject_count = parse_insert_line(
                 line,
-                faction_to_auction_house(meta.faction),
+                SHARED_AUCTION_HOUSE,
                 source_id,
                 meta.snapshot_date,
                 reject_expansion_ids,
@@ -575,16 +658,7 @@ def read_snapshot_file(
             rejected += reject_count
 
     complete = True if meta.complete is None else meta.complete
-    auction_house = faction_to_auction_house(meta.faction)
-    if auction_house == 0:
-        raise SnapshotError(
-            f"{path}: faction is missing; add AHBOT_SNAPSHOT metadata, a faction "
-            "directory/name, or --default-faction"
-        )
-    if any(observation.auction_house != auction_house for observation in observations):
-        raise SnapshotError(
-            f"{path}: faction metadata must appear before listing rows"
-        )
+    auction_house = SHARED_AUCTION_HOUSE
     if not observations and meta.expected_listings != 0:
         complete = False
         message = f"{path}: parsed no listings; refusing an empty refresh"
@@ -625,11 +699,254 @@ def read_snapshot_file(
     return record, observations
 
 
+def _balanced_lua_block(text: str, opening: int) -> str:
+    """Return the contents of a Lua table whose opening brace is at opening."""
+    if opening >= len(text) or text[opening] != "{":
+        return ""
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(opening, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\" and quote == '"':
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening + 1:index]
+    return ""
+
+
+def _lua_named_block(text: str, name: str) -> str:
+    match = re.search(rf'\["{re.escape(name)}"\]\s*=\s*\{{', text)
+    return _balanced_lua_block(text, text.find("{", match.start())) if match else ""
+
+
+def _lua_value(block: str, name: str) -> str | None:
+    match = re.search(
+        rf'\["{re.escape(name)}"\]\s*=\s*(?:"((?:\\.|[^"\\])*)"|(-?\d+(?:\.\d+)?)|(true|false))',
+        block,
+    )
+    if not match:
+        return None
+    return next(value for value in match.groups() if value is not None)
+
+
+def _lua_child_tables(block: str) -> list[str]:
+    tables: list[str] = []
+    depth = 0
+    start = -1
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(block):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\" and quote == '"':
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                tables.append(block[start + 1:index])
+                start = -1
+    return tables
+
+
+def _observation_from_aux_row(
+    row: str,
+    source_id: int,
+    snapshot_date: date | None,
+    reject_expansion_ids: bool,
+) -> tuple[Observation | None, bool]:
+    item_raw = _lua_value(row, "item_key") or _lua_value(row, "item")
+    item_id_raw = _lua_value(row, "item_id")
+    parsed_item = parse_item_identifier(item_raw or "") if item_raw else None
+    if parsed_item is None and item_id_raw is not None:
+        item_id = parse_int(item_id_raw)
+        suffix = parse_int(_lua_value(row, "suffix_id") or "0")
+        parsed_item = (item_id, suffix or 0) if item_id is not None else None
+    if parsed_item is None:
+        return None, False
+    item_id, suffix_id = parsed_item
+    if not is_turtle_compatible_item_id(item_id, reject_expansion_ids):
+        return None, True
+
+    quantity = parse_int(_lua_value(row, "quantity") or _lua_value(row, "count") or "1") or 1
+    unit_price = parse_int(
+        _lua_value(row, "unit_buyout_price")
+        or _lua_value(row, "unit_buyout")
+        or _lua_value(row, "unit_price")
+        or ""
+    )
+    buyout = parse_int(_lua_value(row, "buyout") or _lua_value(row, "buyout_price") or "")
+    if unit_price is None and buyout is not None and quantity > 0:
+        unit_price = buyout // quantity
+    return Observation(
+        item_id=item_id,
+        suffix_id=suffix_id,
+        auction_house=SHARED_AUCTION_HOUSE,
+        unit_price=unit_price if unit_price and unit_price > 0 else None,
+        source_id=source_id,
+        snapshot_date=snapshot_date,
+    ), False
+
+
+def _validate_aux_source(
+    path: Path,
+    record: SourceRecord,
+    allow_incomplete: bool,
+) -> SourceRecord:
+    incomplete = record.complete is False or (
+        record.expected_listings is not None and record.expected_listings != record.parsed_listings
+    )
+    if incomplete:
+        message = (
+            f"{path}: complete scan validation failed (expected "
+            f"{record.expected_listings}, parsed {record.parsed_listings})"
+        )
+        if not allow_incomplete:
+            raise SnapshotError(message)
+        print(f"warning: {message}", file=sys.stderr)
+        record.complete = False
+    return record
+
+
+def read_aux_file(
+    path: Path,
+    source_id: int,
+    defaults: SnapshotMeta,
+    allow_incomplete: bool,
+    reject_expansion_ids: bool,
+) -> tuple[list[SourceRecord], list[Observation]]:
+    """Read either a complete Aux exporter snapshot or legacy Aux history."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    file_date = datetime.fromtimestamp(path.stat().st_ctime).date()
+    snapshot = _lua_named_block(text, "ahbot_snapshot")
+    if snapshot:
+        server = _lua_value(snapshot, "server") or defaults.server
+        faction = normalize_faction(_lua_value(snapshot, "faction") or defaults.faction)
+        raw_date = _lua_value(snapshot, "snapshot_date") or _lua_value(snapshot, "date")
+        scan_time = parse_int(_lua_value(snapshot, "scan_time") or "")
+        snapshot_date = parse_date(raw_date) if raw_date else (
+            datetime.fromtimestamp(scan_time).date() if scan_time else file_date
+        )
+        expected = parse_int(
+            _lua_value(snapshot, "expected_auctions")
+            or _lua_value(snapshot, "expected_listings")
+            or ""
+        )
+        complete = parse_bool(_lua_value(snapshot, "complete") or "false")
+        expected_pages = parse_int(_lua_value(snapshot, "expected_pages") or "")
+        completed_pages = parse_int(_lua_value(snapshot, "completed_pages") or "")
+        if expected_pages is not None and completed_pages is not None and completed_pages < expected_pages:
+            complete = False
+        listings_block = _lua_named_block(snapshot, "listings")
+        observations: list[Observation] = []
+        skipped = rejected = 0
+        for row in _lua_child_tables(listings_block):
+            observation, was_rejected = _observation_from_aux_row(row, source_id, snapshot_date, reject_expansion_ids)
+            if was_rejected:
+                rejected += 1
+            elif observation is None:
+                skipped += 1
+            else:
+                observations.append(observation)
+        record = SourceRecord(
+            source_id=source_id,
+            source_path=path.as_posix(),
+            server=server,
+            faction=faction,
+            auction_house=SHARED_AUCTION_HOUSE,
+            snapshot_date=snapshot_date,
+            complete=complete,
+            expected_listings=expected,
+            parsed_listings=len(observations),
+            skipped_listings=skipped,
+            rejected_expansion_ids=rejected,
+        )
+        return [_validate_aux_source(path, record, allow_incomplete)], observations
+
+    # Legacy Aux only stores one current daily minimum per item. It is still a
+    # useful fallback when a full scan was not exported, so make one source per
+    # non-empty realm/faction history block and retain every file's rows.
+    observations: list[Observation] = []
+    sources: list[SourceRecord] = []
+    next_id = source_id
+    block_re = re.compile(r'\["([^"]+\|[^"]+)"\]\s*=\s*\{')
+    for match in block_re.finditer(text):
+        block = _balanced_lua_block(text, text.find("{", match.start()))
+        history = _lua_named_block(block, "history")
+        if not history:
+            continue
+        realm, faction_raw = match.group(1).rsplit("|", 1)
+        faction = normalize_faction(faction_raw)
+        block_observations: list[Observation] = []
+        rejected = 0
+        for entry in re.finditer(r'\["([^"\]]+)"\]\s*=\s*"([^"]*)"', history):
+            parsed_item = parse_item_identifier(entry.group(1))
+            if parsed_item is None:
+                continue
+            item_id, suffix_id = parsed_item
+            if not is_turtle_compatible_item_id(item_id, reject_expansion_ids):
+                rejected += 1
+                continue
+            fields = entry.group(2).split("#")
+            price = parse_int(fields[1]) if len(fields) > 1 else None
+            if price is None or price <= 0:
+                continue
+            block_observations.append(Observation(item_id, suffix_id, SHARED_AUCTION_HOUSE, price, next_id, file_date))
+        if not block_observations:
+            continue
+        source_path = f"{path.as_posix()}#{match.group(1)}"
+        sources.append(SourceRecord(
+            source_id=next_id,
+            source_path=source_path,
+            server=realm,
+            faction=faction,
+            auction_house=SHARED_AUCTION_HOUSE,
+            snapshot_date=file_date,
+            complete=True,
+            expected_listings=None,
+            parsed_listings=len(block_observations),
+            rejected_expansion_ids=rejected,
+        ))
+        observations.extend(block_observations)
+        next_id += 1
+    if not sources:
+        print(
+            f"Skipping Aux file without snapshot or history: {path}",
+            file=sys.stderr,
+        )
+        return [], []
+    return sources, observations
+
+
 def aggregate_price_rows(
     observations: list[Observation],
 ) -> list[tuple[int, int, int, int, int, int, int, int, int, int, int]]:
     grouped: dict[ItemKey, list[int]] = defaultdict(list)
     for observation in observations:
+        if observation.unit_price is None or observation.unit_price <= 0:
+            continue
         key = ItemKey(observation.item_id, observation.suffix_id, observation.auction_house)
         grouped[key].append(observation.unit_price)
 
@@ -663,7 +980,9 @@ def aggregate_listing_rows(
     listing_counts: dict[ItemKey, int] = defaultdict(int)
 
     for observation in observations:
-        key = ItemKey(observation.item_id, observation.suffix_id, observation.auction_house)
+        # Listing frequency is item-level. Full scans can contain several
+        # random-property variants, but the runtime selects base item ids.
+        key = ItemKey(observation.item_id, 0, observation.auction_house)
         seen_snapshots[key].add(observation.source_id)
         if observation.snapshot_date is not None:
             seen_days[key].add(observation.snapshot_date)
@@ -696,7 +1015,7 @@ def write_generated_sql(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = [
         "-- Generated by build_ahbot_price_stats.py",
-        "-- Turtle/Vanilla AHBot market stats. Do not import WotLK datasets.",
+        "-- Turtle/Vanilla AHBot shared market stats (auction_house=0). Do not import WotLK datasets.",
         f"-- Snapshots: {len(sources)}",
         "-- Sources:",
     ]
@@ -799,24 +1118,43 @@ def write_generated_sql(
     output_path.write_text(text, encoding="utf-8", newline="\n")
 
 
+def archive_aux_files(files: list[Path]) -> list[Path]:
+    """Rename consumed plain Aux files only after SQL output succeeds."""
+    archived: list[Path] = []
+    for path in files:
+        if path.suffix.lower() != ".lua":
+            continue
+        stamp = datetime.fromtimestamp(path.stat().st_ctime).strftime("%Y%m%d")
+        number = 1
+        while True:
+            target = path.with_name(f"aux-addon_{stamp}_{number:02d}.lua.bak")
+            if not target.exists():
+                path.rename(target)
+                archived.append(target)
+                break
+            number += 1
+    return archived
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build Turtle/Vanilla AHBot market-stats SQL from daily Aux-derived "
-            "snapshots across realms, servers, and factions."
+            "Build Turtle/Vanilla AHBot market-stats SQL from raw Aux files or "
+            "legacy SQL snapshots. Generated market rows use auction_house=0."
         ),
         epilog=(
-            "Example (two Turtle servers, keep every daily dump):\n"
-            "  python3 build_ahbot_price_stats.py snapshots/nordanaar snapshots/telabim "
-            "--recursive -o sql/ahbot_market_stats.generated.sql"
+            "Run from a directory containing the client folders:\n"
+            "  python build_ahbot_price_stats.py\n"
+            "The default root is the script directory; plain .lua inputs are "
+            "archived as aux-addon_YYYYMMDD_NN.lua.bak after successful output."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "inputs",
-        nargs="+",
+        nargs="*",
         type=Path,
-        help="SQL snapshot files or directories.",
+        help="Aux/SQL files or directories. With no inputs, scan --aux-root or the script directory.",
     )
     parser.add_argument(
         "-o",
@@ -833,7 +1171,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--recursive",
         action="store_true",
-        help="Recursively search directory inputs.",
+        default=True,
+        help="Recursively search directory inputs (default).",
+    )
+    parser.add_argument(
+        "--aux-root",
+        type=Path,
+        default=None,
+        help="Root to scan when no positional inputs are supplied.",
+    )
+    parser.add_argument(
+        "--no-archive",
+        action="store_true",
+        help="Do not rename consumed plain .lua files after successful output.",
     )
     parser.add_argument(
         "--no-truncate",
@@ -881,27 +1231,39 @@ def build_from_files(
     defaults: SnapshotMeta,
     allow_incomplete: bool,
     reject_expansion_ids: bool,
-) -> tuple[list[SourceRecord], list[Observation]]:
+) -> tuple[list[SourceRecord], list[Observation], list[Path]]:
     sources: list[SourceRecord] = []
     observations: list[Observation] = []
-    for index, path in enumerate(files, start=1):
-        record, parsed = read_snapshot_file(
-            path,
-            index,
-            defaults,
-            allow_incomplete,
-            reject_expansion_ids,
-        )
-        sources.append(record)
+    consumed: list[Path] = []
+    next_id = 1
+    for path in files:
+        if path.name.lower().endswith(".lua") or path.name.lower().endswith(".lua.bak"):
+            parsed_sources, parsed = read_aux_file(
+                path, next_id, defaults, allow_incomplete, reject_expansion_ids
+            )
+            if not parsed_sources:
+                continue
+            sources.extend(parsed_sources)
+            next_id = max(source.source_id for source in parsed_sources) + 1
+        else:
+            record, parsed = read_snapshot_file(
+                path, next_id, defaults, allow_incomplete, reject_expansion_ids
+            )
+            sources.append(record)
+            next_id += 1
+        consumed.append(path)
         observations.extend(parsed)
-    return sources, observations
+    return sources, observations, consumed
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    files = collect_sql_files(args.inputs, args.pattern, args.recursive)
+    roots = args.inputs or [args.aux_root or Path(__file__).resolve().parent]
+    files, skipped_accounts = collect_input_files(roots, args.pattern, args.recursive)
+    output_resolved = args.output.resolve()
+    files = [path for path in files if path.resolve() != output_resolved]
     if not files:
-        print("No SQL files found.", file=sys.stderr)
+        print("No Aux or SQL snapshot files found.", file=sys.stderr)
         return 1
 
     defaults = SnapshotMeta(
@@ -912,7 +1274,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SnapshotError(f"Unknown default faction '{args.default_faction}'")
 
     try:
-        sources, observations = build_from_files(
+        sources, observations, consumed = build_from_files(
             files,
             defaults,
             args.allow_incomplete,
@@ -920,6 +1282,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except SnapshotError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not sources:
+        print("No usable Aux or SQL snapshots found.", file=sys.stderr)
         return 1
 
     snapshot_count_by_house: dict[int, int] = defaultdict(int)
@@ -939,14 +1304,20 @@ def main(argv: list[str] | None = None) -> int:
 
     skipped = sum(source.skipped_listings for source in sources)
     rejected = sum(source.rejected_expansion_ids for source in sources)
-    print(f"Read {len(files)} SQL file(s).")
+    print(f"Read {len(consumed)} input file(s).")
     print(f"Collected {len(observations)} listing observation(s).")
+    if skipped_accounts:
+        print(f"Skipped {len(skipped_accounts)} account folder(s) without Aux file.")
     if skipped:
         print(f"Skipped {skipped} malformed listing row(s).")
     if rejected:
         print(f"Rejected {rejected} TBC/WotLK-range item id(s).")
     print(f"Wrote {len(price_rows)} price stat row(s) to {args.output}.")
     print(f"Wrote {len(listing_rows)} listing stat row(s) to {args.output}.")
+    if not args.no_archive:
+        archived = archive_aux_files(consumed)
+        if archived:
+            print(f"Archived {len(archived)} plain Aux file(s).")
     return 0
 
 

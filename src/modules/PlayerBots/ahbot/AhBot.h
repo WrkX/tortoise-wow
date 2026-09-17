@@ -60,6 +60,7 @@ namespace ahbot
         std::map<ItemStatKey, PricePercentiles> priceStats;
         std::map<ItemStatKey, uint32> listingSeen;
         std::map<ItemStatKey, uint32> listingSnapshots;
+        std::map<ItemStatKey, uint32> listingCounts;
         std::map<uint32, uint64> historyBidSum; // key: faction * 10 + won
         std::map<uint32, uint32> lastSelfBuyTime; // faction
         std::map<uint32, int64> availableMoney;

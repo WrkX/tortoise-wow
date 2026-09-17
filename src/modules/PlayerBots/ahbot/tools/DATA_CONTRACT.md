@@ -6,9 +6,10 @@ Turtle WoW auction-house data.
 ## What the data powers
 
 The server uses historical listings to produce realistic per-item prices and
-availability. Prices and availability remain separate for Alliance, Horde, and
-Neutral auction houses. Random-property/suffix variants may also have their own
-statistics.
+availability. All generated market statistics are shared across servers, dates,
+and factions using `auction_house=0`. Random-property/suffix variants may also
+have their own price statistics; listing frequency is item-level because the
+runtime selects item templates.
 
 The converter must generate SQL for the **characters database**, never the
 world database.
@@ -16,13 +17,16 @@ world database.
 ## Required input per snapshot
 
 Each snapshot represents one server, faction, and time. Prefer complete auction
-listings instead of only the cheapest price.
+listings instead of only the cheapest price. Legacy Aux daily-minimum history is
+accepted as a fallback when a complete snapshot is unavailable.
 
-Required for every listing:
+Required for every price-bearing listing:
 
 - `item_id`: positive item-template ID
 - `suffix_id`: signed random-property/suffix ID; use `0` when absent
-- either `unit_price` in copper, or `buyout` plus a positive `quantity`
+- either `unit_price` in copper, or `buyout` plus a positive `quantity`. A
+  complete raw scan may also contain no-buyout rows; those count toward
+  `listing_count` but are omitted from price percentiles.
 
 Required once per snapshot:
 
@@ -54,23 +58,21 @@ distinguish them from expansion items.
 
 ## Auction-house mapping
 
-| Faction | `auction_house` |
+| Generated market | `auction_house` |
 | --- | ---: |
-| Alliance | 1 |
-| Horde | 6 |
-| Neutral | 7 |
+| Shared | 0 |
 
-Servers may be pooled to increase sample size, but factions must never be
-pooled together.
+The source table retains faction provenance, but faction is not a generated
+statistics dimension. Physical houses 1/6/7 remain live runtime houses.
 
 ## Required output tables
 
 The generated SQL must create/upsert these character-database tables using the
 schema in `ai_playerbot_ahbot_market_stats.sql`:
 
-- `ahbot_price_stats`: nearest-rank price percentiles per
-  `(item_id, suffix_id, auction_house)`
-- `ahbot_listing_stats`: snapshot presence and listing volume for the same key
+- `ahbot_price_stats`: nearest-rank price percentiles per shared
+  `(item_id, suffix_id, 0)`
+- `ahbot_listing_stats`: shared item snapshot presence and listing volume
 - `ahbot_market_snapshot_source`: one provenance row per input snapshot
 - `ahbot_price`: optional unsuffixed median price for the legacy runtime lookup
 
@@ -87,10 +89,10 @@ Required availability columns are:
 ## Converter safety rules
 
 - Produce deterministic output from the same inputs.
-- Reject unknown/missing factions instead of writing house `0`.
+- Write only shared market rows with house `0`; retain source faction for provenance.
 - Reject incomplete scans or listing-count mismatches by default.
-- Reject a zero-row parse by default; allow it only when the snapshot explicitly
-  declares `expected_listings=0`.
+- Reject an empty full snapshot unless it explicitly declares
+  `expected_listings=0`; empty legacy faction blocks are ignored.
 - Do not silently discard malformed rows; report their count.
 - Preserve negative suffix IDs.
 - Keep previous daily snapshots so percentiles describe a time window rather

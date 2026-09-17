@@ -39,7 +39,7 @@
 
 #include <memory>
 
-#define MAX_SPELL_ID 60000
+#define MAX_SPELL_ID 99999
 
 // For Plainsrunning hackfixes:
 

@@ -3,10 +3,10 @@
 -- C++ AhBot runtime (CharacterDatabase).
 --
 -- These sit in the characters database next to ahbot_price / ahbot_history.
--- auction_house uses the same house ids the current AhBot runtime writes
--- (1 Alliance, 6 Horde, 7 Neutral). suffix_id 0 is an item with no random
--- property. Presence frequency (seen_count / days_seen) is stored separately
--- from listing_count so scarcity is not confused with stack size or dump size.
+-- Generated market rows use auction_house=0 (one shared market). The runtime
+-- still uses physical houses 1/6/7 for posting and buying and falls back to
+-- the shared rows. suffix_id 0 is an item with no random property. Presence
+-- frequency (seen_count / days_seen) is stored separately from listing_count.
 --
 -- Safe to re-apply: does not DROP populated tables.
 
