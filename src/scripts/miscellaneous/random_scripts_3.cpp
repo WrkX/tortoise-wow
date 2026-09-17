@@ -7648,6 +7648,8 @@ static std::map<uint32 /*low guid*/, uint32 /*shopId*/> g_refundGossipState;
 
 bool GossipHello_ShopRefundNPC(Player* player, Creature* creature)
 {
+    player->ADD_GOSSIP_ITEM(GOSSIP_ICON_VENDOR, "Trade", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_TRADE);
+
     auto history = sObjectMgr.GetShopLogEntries(player->GetSession()->GetAccountId());
 
     uint32 count = 0;
@@ -7751,6 +7753,12 @@ bool RemoveSpecialEffectOnRefund(uint32 itemId, uint32 spellId, Player* pPlayer)
 
 bool GossipSelect_ShopRefundNPC(Player* pPlayer, Creature* pCreature, uint32 /*uiSender*/, uint32 uiAction)
 {
+    if (uiAction == GOSSIP_ACTION_TRADE)
+    {
+        pPlayer->GetSession()->SendListInventory(pCreature->GetGUID());
+        return true;
+    }
+
     uint32& shopId = g_refundGossipState[pPlayer->GetGUIDLow()];
     if (shopId)
     {
