@@ -64,7 +64,7 @@ bool ItemUse_item_donation_mark(Player* player, Item* item, SpellCastTargets& /*
     uint32 accountId = player->GetSession()->GetAccountId();
     if (!accountId || !CanCreditDonationPoints(accountId, points))
     {
-        player->GetSession()->SendNotification("Your Donation Point balance cannot hold this redemption.");
+        player->GetSession()->SendNotification("Your Mark of the Ranger General balance cannot hold this redemption.");
         return true;
     }
 
@@ -80,9 +80,9 @@ bool ItemUse_item_donation_mark(Player* player, Item* item, SpellCastTargets& /*
     player->DestroyItemCount(item, count, true);
     player->SaveInventoryAndGoldToDB();
 
-    sLog.outString("[DONATION] Player %u on account %u redeemed item %u for %u points.",
+    sLog.outString("[Marks of the Ranger General] Player %u on account %u redeemed item %u for %u points.",
         player->GetGUIDLow(), accountId, item->GetEntry(), points);
-    player->GetSession()->SendNotification("You redeemed %u Donation Point(s).", points);
+    player->GetSession()->SendNotification("You redeemed %u Mark(s) of the Ranger General.", points);
 
     return true;
 }
