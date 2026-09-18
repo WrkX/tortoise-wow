@@ -135,6 +135,13 @@ namespace ai { namespace botdiag {
 #define SKILL_PERM_BONUS(x)    int16(PAIR32_HIPART(x))
 #define MAKE_SKILL_BONUS(t, p) MAKE_PAIR32(t,p)
 
+namespace
+{
+    constexpr uint32 SPELL_FIND_HERBS = 2383;
+    constexpr uint32 SPELL_FIND_MINERALS = 2580;
+    constexpr uint32 SPELL_FIND_HERBS_AND_MINERALS = 61002;
+}
+
 // [-ZERO] need recheck, some values known not existed in 1.12.1
 enum CharacterFlags
 {
@@ -4636,6 +4643,21 @@ bool Player::IsNeedCastPassiveLikeSpellAtLearn(SpellEntry const* spellInfo) cons
     return need_cast && (!spellInfo->CasterAuraState || HasAuraState(AuraState(spellInfo->CasterAuraState)));
 }
 
+void Player::UpdateCombinedGatheringTrackingSpell()
+{
+    bool hasHerbalism = HasSkill(SKILL_HERBALISM);
+    bool hasMining = HasSkill(SKILL_MINING);
+    bool hasCombined = HasSpell(SPELL_FIND_HERBS_AND_MINERALS);
+
+    if (hasHerbalism && hasMining)
+    {
+        if (!hasCombined)
+            LearnSpell(SPELL_FIND_HERBS_AND_MINERALS, false);
+    }
+    else if (hasCombined)
+        RemoveSpell(SPELL_FIND_HERBS_AND_MINERALS, false, false);
+}
+
 void Player::LearnSpell(uint32 spell_id, bool dependent, bool talent)
 {
     PlayerSpellMap::iterator itr = m_spells.find(spell_id);
@@ -4668,6 +4690,9 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, bool talent)
                 LearnSpell(i->second, false);
         }
     }
+
+    if (spell_id == SPELL_FIND_HERBS || spell_id == SPELL_FIND_MINERALS)
+        UpdateCombinedGatheringTrackingSpell();
 }
 
 void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank, bool hardReset)
@@ -7244,6 +7269,9 @@ void Player::SetSkill(uint16 id, uint16 currVal, uint16 maxVal, uint16 step /*=0
 
             // Learn all spells auto-trained by this skill on change
             UpdateSkillTrainedSpells(id, currVal);
+
+            if (id == SKILL_HERBALISM || id == SKILL_MINING)
+                UpdateCombinedGatheringTrackingSpell();
         }
         else                                                //remove
         {
@@ -7273,6 +7301,9 @@ void Player::SetSkill(uint16 id, uint16 currVal, uint16 maxVal, uint16 step /*=0
 
             // Remove all spells dependent on this skill unconditionally
             UpdateSkillTrainedSpells(id, 0);
+
+            if (id == SKILL_HERBALISM || id == SKILL_MINING)
+                UpdateCombinedGatheringTrackingSpell();
 
             // remove all quests related to this skill (else the spell will be automatically learned at next login, cf Player::LearnQuestRewardedSpells)
             for (auto& itr : mQuestStatus)
@@ -7342,6 +7373,9 @@ void Player::SetSkill(uint16 id, uint16 currVal, uint16 maxVal, uint16 step /*=0
 
                 // Learn all spells auto-trained by this skill
                 UpdateSkillTrainedSpells(id, currVal);
+
+                if (id == SKILL_HERBALISM || id == SKILL_MINING)
+                    UpdateCombinedGatheringTrackingSpell();
                 return;
             }
         }
@@ -17995,6 +18029,8 @@ void Player::_LoadSpells(QueryResult *result)
         }
         while (result->NextRow());
     }
+
+    UpdateCombinedGatheringTrackingSpell();
 }
 
 void Player::_LoadPlayerVariables(QueryResult* result)
@@ -21495,6 +21531,8 @@ void Player::LearnDefaultSpells()
     {
         LearnGameMasterSpells(); // Add some GM-Spells to new created toons
     }
+
+    UpdateCombinedGatheringTrackingSpell();
 }
 
 void Player::LearnQuestRewardedSpells(Quest const* quest)

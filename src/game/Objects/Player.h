@@ -1747,6 +1747,7 @@ class Player final: public Unit
         void _LoadPlayerSavedSpecs(QueryResult* result);
 
         bool IsNeedCastPassiveLikeSpellAtLearn(SpellEntry const* spellInfo) const;
+        void UpdateCombinedGatheringTrackingSpell();
         void SendInitialSpells() const;
         bool AddSpell(uint32 spell_id, bool active, bool learning, bool dependent, bool disabled);
     public:
