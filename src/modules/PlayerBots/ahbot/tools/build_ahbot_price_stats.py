@@ -814,10 +814,22 @@ def _validate_aux_source(
     path: Path,
     record: SourceRecord,
     allow_incomplete: bool,
+    pages_complete: bool,
 ) -> SourceRecord:
-    incomplete = record.complete is False or (
-        record.expected_listings is not None and record.expected_listings != record.parsed_listings
+    count_mismatch = (
+        record.expected_listings is not None
+        and record.expected_listings != record.parsed_listings
     )
+    # The live auction house can change while a multi-hour scan is paging
+    # through it.  For the raw Aux exporter, complete/page-complete metadata
+    # is authoritative; the initial auction count is only a diagnostic.
+    if count_mismatch and record.complete and pages_complete:
+        print(
+            f"warning: {path}: live auction count changed during completed scan "
+            f"(expected {record.expected_listings}, parsed {record.parsed_listings}); accepting",
+            file=sys.stderr,
+        )
+    incomplete = record.complete is False or (count_mismatch and not pages_complete)
     if incomplete:
         message = (
             f"{path}: complete scan validation failed (expected "
@@ -859,6 +871,11 @@ def read_aux_file(
         completed_pages = parse_int(_lua_value(snapshot, "completed_pages") or "")
         if expected_pages is not None and completed_pages is not None and completed_pages < expected_pages:
             complete = False
+        pages_complete = (
+            expected_pages is not None
+            and completed_pages is not None
+            and completed_pages >= expected_pages
+        )
         listings_block = _lua_named_block(snapshot, "listings")
         observations: list[Observation] = []
         skipped = rejected = 0
@@ -883,7 +900,7 @@ def read_aux_file(
             skipped_listings=skipped,
             rejected_expansion_ids=rejected,
         )
-        return [_validate_aux_source(path, record, allow_incomplete)], observations
+        return [_validate_aux_source(path, record, allow_incomplete, pages_complete)], observations
 
     # Legacy Aux only stores one current daily minimum per item. It is still a
     # useful fallback when a full scan was not exported, so make one source per

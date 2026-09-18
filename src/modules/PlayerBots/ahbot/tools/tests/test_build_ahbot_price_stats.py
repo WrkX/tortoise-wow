@@ -313,6 +313,32 @@ class BuilderEndToEndTests(unittest.TestCase):
         self.assertIn("VALUES (754, 5, 0, 1, 400, 400, 400, 400, 400, 400, 400)", sql)
         self.assertIn("VALUES (2580, 0, 0, 1, 1, 1, 2)", sql)
 
+    def test_raw_aux_completed_snapshot_allows_live_count_change(self) -> None:
+        snapshot = write_sql(
+            self.root / "SavedVariables" / "aux-addon.lua",
+            """aux = {
+  ["ahbot_snapshot"] = {
+    ["server"] = "Eversong Wilds",
+    ["faction"] = "Horde",
+    ["complete"] = true,
+    ["expected_pages"] = 2,
+    ["completed_pages"] = 2,
+    ["expected_auctions"] = 79527,
+    ["listings"] = {
+      [1] = { ["item_key"] = "2580:0", ["quantity"] = 1, ["buyout"] = 40 },
+      [2] = { ["item_key"] = "754:0", ["quantity"] = 1, ["buyout"] = 80 },
+    },
+  },
+}
+""",
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, sql = self.run_builder(str(snapshot))
+        self.assertEqual(code, 0)
+        self.assertIn("VALUES (2580, 0, 0, 1, 40, 40, 40, 40, 40, 40, 40)", sql)
+        self.assertIn("live auction count changed during completed scan", stderr.getvalue())
+
     def test_account_folder_without_aux_is_skipped(self) -> None:
         empty = self.root / "client" / "WTF" / "Account" / "EMPTY"
         (empty / "SavedVariables").mkdir(parents=True)

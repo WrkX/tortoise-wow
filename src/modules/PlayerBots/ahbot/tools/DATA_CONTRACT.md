@@ -90,7 +90,9 @@ Required availability columns are:
 
 - Produce deterministic output from the same inputs.
 - Write only shared market rows with house `0`; retain source faction for provenance.
-- Reject incomplete scans or listing-count mismatches by default.
+- Reject incomplete scans by default. For completed raw Aux scans, retain and
+  warn about listing-count changes caused by the live auction house changing
+  during pagination.
 - Reject an empty full snapshot unless it explicitly declares
   `expected_listings=0`; empty legacy faction blocks are ignored.
 - Do not silently discard malformed rows; report their count.

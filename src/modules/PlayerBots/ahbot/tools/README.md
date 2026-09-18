@@ -77,11 +77,15 @@ Header (optional, validated when present):
 -- AHBOT_SNAPSHOT server=nordanaar faction=alliance date=2026-09-07 complete=1 expected_listings=3
 ```
 
-If `complete=0` or `expected_listings` does not match the number of accepted
-rows, the build exits unless you pass `--allow-incomplete`.
+If `complete=0`, the build exits unless you pass `--allow-incomplete`. For raw
+Aux scans marked complete, a difference between the initial expected auction
+count and captured rows is reported as a warning and accepted, because the
+live auction house can change during a long paginated scan. Other incomplete
+metadata is still rejected by default.
 
-Raw Aux full scans are accepted only when marked complete and their expected
-auction count matches the captured rows. Incomplete scans are rejected unless
+Raw Aux full scans are accepted when marked complete and all expected pages
+were completed. A changed auction count is retained as source metadata and
+does not invalidate the scan. Incomplete scans are rejected unless
 `--allow-incomplete` is supplied. Legacy Aux daily-minimum history is accepted
 as the fallback when no full scan is present.
 
