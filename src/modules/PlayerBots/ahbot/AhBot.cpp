@@ -1016,7 +1016,8 @@ int AhBot::AddAuction(int auction, Category* category, ItemPrototype const* prot
     if (sAhBotConfig.listingExpireMinSeconds && sAhBotConfig.listingExpireMaxSeconds)
         auction_time = urand(sAhBotConfig.listingExpireMinSeconds, sAhBotConfig.listingExpireMaxSeconds);
     else
-        auction_time = uint32(urand(8, 24) * HOUR * sWorld.getConfig(CONFIG_FLOAT_RATE_AUCTION_TIME));
+        auction_time = uint32(RollClientAuctionDurationHours(urand(0, 0x7fffffff)) * HOUR *
+            sWorld.getConfig(CONFIG_FLOAT_RATE_AUCTION_TIME));
 
     if (dryRun)
     {

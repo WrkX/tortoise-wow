@@ -583,6 +583,69 @@ bool Loot::FillLoot(uint32 loot_id, LootStore const& store, Player* loot_owner, 
     return true;
 }
 
+bool Loot::AddFFAItem(uint32 itemid, uint32 count, std::vector<Player*> const& players)
+{
+    if (!itemid || !count || items.size() >= MAX_NR_LOOT_ITEMS)
+        return false;
+
+    ItemPrototype const* proto = sObjectMgr.GetItemPrototype(itemid);
+    if (!proto)
+        return false;
+
+    if (!proto->Discovered)
+        proto->Discovered = true;
+
+    items.push_back(LootItem(itemid, count));
+    LootItem& item = items.back();
+    // Force FFA so we don't have to set ITEM_FLAG_PARTY_LOOT on the template.
+    item.freeforall = true;
+    uint8 const itemIndex = static_cast<uint8>(items.size() - 1);
+
+    bool added = false;
+    for (Player* player : players)
+    {
+        if (!player || !player->IsInWorld() ||
+            !item.AllowedForPlayer(player, GetLootTarget()))
+            continue;
+
+        uint32 const playerGuid = player->GetGUIDLow();
+        QuestItemList* playerItems = nullptr;
+        QuestItemMap::iterator playerItemsItr = m_playerFFAItems.find(playerGuid);
+        if (playerItemsItr == m_playerFFAItems.end())
+        {
+            playerItems = new QuestItemList();
+            m_playerFFAItems[playerGuid] = playerItems;
+        }
+        else
+            playerItems = playerItemsItr->second;
+
+        playerItems->push_back(QuestItem(itemIndex));
+        ++unlootedCount;
+        added = true;
+
+        bool isAllowedLooter = false;
+        for (ObjectGuid const& allowedLooter : m_allowedLooters)
+        {
+            if (allowedLooter == player->GetObjectGuid())
+            {
+                isAllowedLooter = true;
+                break;
+            }
+        }
+
+        if (!isAllowedLooter)
+            m_allowedLooters.push_back(player->GetObjectGuid());
+    }
+
+    if (!added)
+    {
+        items.pop_back();
+        return false;
+    }
+
+    return true;
+}
+
 bool Loot::IsAllowedLooter(ObjectGuid guid, bool doPersonalCheck) const
 {
     if (doPersonalCheck && m_personal)

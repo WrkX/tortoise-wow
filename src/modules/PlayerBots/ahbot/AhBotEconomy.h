@@ -123,6 +123,15 @@ namespace ahbot
         return remaining < itemsPerCycle ? remaining : itemsPerCycle;
     }
 
+    // The unmodified client exposes 2h, 8h, and 24h auction durations.
+    // Keep AHBot listings indistinguishable from client-created auctions when
+    // no explicit seconds override is configured.
+    inline uint32_t RollClientAuctionDurationHours(uint32_t roll)
+    {
+        static const uint32_t kHours[] = { 2, 8, 24 };
+        return kHours[roll % (sizeof(kHours) / sizeof(kHours[0]))];
+    }
+
     inline uint32_t BuyerMaxAcceptedPrice(const PricePercentiles& stats, uint32_t percentile)
     {
         if (percentile <= 10)
@@ -543,6 +552,9 @@ namespace ahbot
             fail("at target posts nothing");
         if (ItemsToPostThisCycle(10, 15, 0) != 5)
             fail("unbounded cycle posts remaining");
+        if (RollClientAuctionDurationHours(0) != 2 || RollClientAuctionDurationHours(1) != 8 ||
+            RollClientAuctionDurationHours(2) != 24 || RollClientAuctionDurationHours(3) != 2)
+            fail("client auction duration roll");
 
         PricePercentiles stats;
         stats.sampleCount = 10;

@@ -245,8 +245,9 @@ AhBot.Neutral.MinItems = 0
 AhBot.Neutral.MaxItems = 0
 AhBot.Neutral.TargetPercent = 100
 
-# Optional listing duration override in seconds. 0/0 keeps the existing 8-24h
-# random duration. Do not set Min below 900 or Max above 172800 if you enable it.
+# Optional listing duration override in seconds. 0/0 randomly chooses one of
+# the three client durations: 2h, 8h, or 24h. Do not set Min below 900 or Max
+# above 172800 if you enable it.
 AhBot.ListingExpireTimeInSecondsMin = 0
 AhBot.ListingExpireTimeInSecondsMax = 0
 

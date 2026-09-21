@@ -38,6 +38,12 @@
 #include "GridNotifiersImpl.h"
 #include "Chat.h"
 
+namespace
+{
+    constexpr uint32 PVP_BONUS_ITEM = 1985500;
+    constexpr uint32 PVP_BONUS_ITEM_COUNT = 2;
+}
+
 namespace MaNGOS
 {
 class BattleGroundChatBuilder
@@ -772,7 +778,10 @@ void BattleGround::EndBattleGround(Team winner)
         }
 
         if (team == winner)
+        {
             RewardMark(pPlayer, true);
+            RewardItem(pPlayer, PVP_BONUS_ITEM, PVP_BONUS_ITEM_COUNT);
+        }
         // World of Warcraft Client Patch 1.8.4 (2005-12-06)
         // - Battles must now last at least ten minutes after the start of the 
         //   battle in order for the losing team to receive a Mark of Honor.

@@ -305,7 +305,7 @@ struct Loot
     LootType loot_type;                                     // required for for proper item loot finish (store internal loot types in different from 3.x version, in fact this meaning that it send same loot types for interesting cases like 3.x version code, skip pre-3.x client loot type limitaitons)
 
     Loot(WorldObject const* lootTarget, uint32 _gold = 0) :
-        m_personal(false), gold(_gold), unlootedCount(0), roundRobinPlayer(0), loot_type(LOOT_CORPSE), m_lootTarget(lootTarget), m_groupTeam(TEAM_CROSSFACTION) { }
+        m_personal(false), gold(_gold), unlootedCount(0), roundRobinPlayer(0), loot_type(LOOT_CORPSE), m_lootTarget(lootTarget), m_groupTeam(TEAM_CROSSFACTION), m_bossBonusDropRolled(false) { }
     ~Loot() { clear(); }
 
     // bot calls these accessors.
@@ -384,6 +384,7 @@ struct Loot
         m_allowedLooters.clear();
         m_personal = true;
         m_groupTeam = TEAM_CROSSFACTION;
+        m_bossBonusDropRolled = false;
     }
 
     void leaveOnlyQuestItems()
@@ -405,6 +406,19 @@ struct Loot
 
     void GenerateMoneyLoot(uint32 minAmount, uint32 maxAmount);
     bool FillLoot(uint32 loot_id, LootStore const& store, Player* loot_owner, bool personal, bool noEmptyError = false, WorldObject const* looted = nullptr);
+
+    // Adds an FFA copy for each player without requiring ITEM_FLAG_PARTY_LOOT.
+    bool AddFFAItem(uint32 itemid, uint32 count, std::vector<Player*> const& players);
+
+    // OnCreatureKill is per credited player; this keeps the roll one-shot per corpse.
+    bool TryMarkBossBonusDropRolled()
+    {
+        if (m_bossBonusDropRolled)
+            return false;
+
+        m_bossBonusDropRolled = true;
+        return true;
+    }
 
     // Inserts the item into the loot (called by LootTemplate processors)
     void AddItem(LootStoreItem const & item);
@@ -444,6 +458,7 @@ struct Loot
         // What is looted
         WorldObject const* m_lootTarget;
         Team m_groupTeam;
+        bool m_bossBonusDropRolled;
 };
 
 struct LootView
