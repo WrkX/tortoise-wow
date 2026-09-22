@@ -178,7 +178,10 @@ enum QuestSpecialFlags
     QUEST_SPECIAL_FLAG_HARDCORE_ONLY        = 0x080,
     QUEST_SPECIAL_FLAG_YEARLY_RESET         = 0x100,
     QUEST_SPECIAL_FLAG_CAN_SWAP_REWARDS     = 0x200,
-    QUEST_SPECIAL_FLAG_NOT_HARDCORE         = 0x400
+    QUEST_SPECIAL_FLAG_NOT_HARDCORE         = 0x400,
+    // Server-side cadence flag. Weekly quests keep the repeatable lifecycle,
+    // but their reward is gated by character_weekly_quest.
+    QUEST_SPECIAL_FLAG_WEEKLY               = 0x800
 };
 
 enum QuestMethod
@@ -190,7 +193,7 @@ enum QuestMethod
     QUEST_METHOD_LIMIT                      = 0x3,          // Highest Method entry DB should have
 };
 
-#define QUEST_SPECIAL_FLAG_DB_ALLOWED (QUEST_SPECIAL_FLAG_REPEATABLE | QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT | QUEST_SPECIAL_FLAG_DAILY | QUEST_SPECIAL_FLAG_HARDCORE_ONLY | QUEST_SPECIAL_FLAG_YEARLY_RESET | QUEST_SPECIAL_FLAG_NOT_HARDCORE)
+#define QUEST_SPECIAL_FLAG_DB_ALLOWED (QUEST_SPECIAL_FLAG_REPEATABLE | QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT | QUEST_SPECIAL_FLAG_DAILY | QUEST_SPECIAL_FLAG_HARDCORE_ONLY | QUEST_SPECIAL_FLAG_YEARLY_RESET | QUEST_SPECIAL_FLAG_NOT_HARDCORE | QUEST_SPECIAL_FLAG_WEEKLY)
 
 struct QuestLocale
 {
@@ -276,6 +279,7 @@ class Quest
         uint32 GetQuestCompleteScript() const { return QuestCompleteScript; }
 
         bool   IsRepeatable() const { return m_SpecialFlags & QUEST_SPECIAL_FLAG_REPEATABLE; }
+        bool   IsWeekly() const { return HasSpecialFlag(QUEST_SPECIAL_FLAG_WEEKLY); }
         bool   IsAutoComplete() const { return QuestMethod ? false : true; }
         bool   IsAllowedInRaid() const;
 

@@ -221,7 +221,9 @@ set_target_properties(${EXECUTABLE_NAME} PROPERTIES LINK_FLAGS
 install(TARGETS ${EXECUTABLE_NAME} DESTINATION ${BIN_DIR})
 install(FILES run-mangosd DESTINATION ${BIN_DIR})
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/mangosd.conf.dist.in ${CMAKE_CURRENT_BINARY_DIR}/mangosd.conf.dist)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/mangosd.conf.dist DESTINATION ${CONF_DIR})
+InstallServerConf(${CMAKE_CURRENT_BINARY_DIR}/mangosd.conf.dist ${CONF_DIR})
+InstallServerConf(${CMAKE_CURRENT_SOURCE_DIR}/mods.conf.dist.in ${CONF_DIR})
+InstallServerConf(${CMAKE_CURRENT_SOURCE_DIR}/rate.conf.dist.in ${CONF_DIR})
 
 if(WIN32 AND MSVC)
   # Every configuration, not just Debug: a Release minidump needs the symbols

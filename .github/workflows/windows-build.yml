@@ -200,13 +200,21 @@ jobs:
           Copy-Item -Force "$bin/ACE.dll" $dest
           Copy-Item -Force "$bin/boost_*.dll" $dest
 
-          foreach ($name in @('mangosd.exe', 'realmd.exe', 'mangosd.conf.dist', 'realmd.conf.dist')) {
+          foreach ($name in @(
+              'mangosd.exe', 'realmd.exe',
+              'mangosd.conf', 'realmd.conf', 'mods.conf', 'rate.conf',
+              'aiplayerbot.conf', 'ahbot.conf')) {
             if (-not (Test-Path (Join-Path $dest $name))) {
               throw "missing $name in install dir"
             }
           }
-          if (-not (Test-Path (Join-Path $dest 'aiplayerbot.conf.dist'))) {
-            Write-Warning 'aiplayerbot.conf.dist missing from install'
+          $moduleConf = @(Get-ChildItem -Path (Join-Path $dest 'modules') -Filter '*.conf' -File -ErrorAction SilentlyContinue)
+          if ($moduleConf.Count -lt 1) {
+            throw 'no module configs were installed'
+          }
+          $stale = @(Get-ChildItem -Path $dest -Recurse -Filter '*.conf.dist' -File -ErrorAction SilentlyContinue)
+          if ($stale.Count -gt 0) {
+            throw ("config templates were installed without renaming: " + (($stale | ForEach-Object { $_.FullName }) -join ', '))
           }
 
           @(

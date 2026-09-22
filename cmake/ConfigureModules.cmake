@@ -260,6 +260,26 @@ macro(TW_ADD_SCRIPT_LOADER script_dec include)
   endif()
 endmacro()
 
+# mangosd.conf.dist and foo.conf.dist.in are templates. The server opens the
+# same file with the .dist (and .in) suffix removed.
+function(ServerConfRuntimeName source_path out_var)
+  get_filename_component(_name "${source_path}" NAME)
+  string(REGEX REPLACE "\\.dist(\\.in)?$" "" _runtime "${_name}")
+  if(_runtime STREQUAL _name)
+    message(FATAL_ERROR "InstallServerConf expected a .conf.dist template: ${source_path}")
+  endif()
+  set(${out_var} "${_runtime}" PARENT_SCOPE)
+endfunction()
+
+function(InstallServerConf source_path dest_dir)
+  if(NOT EXISTS "${source_path}")
+    message(FATAL_ERROR "Config template does not exist: ${source_path}")
+  endif()
+
+  ServerConfRuntimeName("${source_path}" _runtime)
+  install(FILES "${source_path}" DESTINATION "${dest_dir}" RENAME "${_runtime}")
+endfunction()
+
 function(CopyModuleConfig config_file)
   if(NOT EXISTS "${config_file}")
     message(FATAL_ERROR "Module config file does not exist: ${config_file}")
@@ -268,9 +288,9 @@ function(CopyModuleConfig config_file)
   TortoiseAddGlobalProperty("TORTOISE_MODULE_CONFIG_FILES" "${config_file}")
 
   if(UNIX)
-    install(FILES "${config_file}" DESTINATION "${CONF_DIR}/modules")
+    InstallServerConf("${config_file}" "${CONF_DIR}/modules")
   elseif(WIN32)
-    install(FILES "${config_file}" DESTINATION "${CMAKE_INSTALL_PREFIX}/modules")
+    InstallServerConf("${config_file}" "${CMAKE_INSTALL_PREFIX}/modules")
   endif()
 endfunction()
 
@@ -279,24 +299,14 @@ function(GetModuleConfigList variable)
 
   GetModuleSourceList(MODULES_MODULE_LIST)
   foreach(SOURCE_MODULE ${MODULES_MODULE_LIST})
-    ModuleNameToVariable("${SOURCE_MODULE}" MODULE_VARIABLE)
+    file(GLOB MODULE_CONFIG_DIST_FILES CONFIGURE_DEPENDS
+      "${CMAKE_SOURCE_DIR}/modules/${SOURCE_MODULE}/conf/*.conf.dist")
 
-    if("${${MODULE_VARIABLE}}" STREQUAL "default")
-      set(MODULE_LINKAGE "${MODULES_DEFAULT_LINKAGE}")
-    else()
-      set(MODULE_LINKAGE "${${MODULE_VARIABLE}}")
-    endif()
-
-    if(NOT MODULE_LINKAGE STREQUAL "disabled")
-      file(GLOB MODULE_CONFIG_DIST_FILES CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/modules/${SOURCE_MODULE}/conf/*.conf.dist")
-
-      foreach(MODULE_CONFIG_DIST_FILE ${MODULE_CONFIG_DIST_FILES})
-        get_filename_component(MODULE_CONFIG_FILE_NAME "${MODULE_CONFIG_DIST_FILE}" NAME)
-        string(REGEX REPLACE "\\.dist$" "" MODULE_CONFIG_FILE_NAME "${MODULE_CONFIG_FILE_NAME}")
-        list(APPEND MODULE_CONFIG_LIST "${MODULE_CONFIG_FILE_NAME}")
-      endforeach()
-    endif()
+    foreach(MODULE_CONFIG_DIST_FILE ${MODULE_CONFIG_DIST_FILES})
+      get_filename_component(MODULE_CONFIG_FILE_NAME "${MODULE_CONFIG_DIST_FILE}" NAME)
+      string(REGEX REPLACE "\\.dist$" "" MODULE_CONFIG_FILE_NAME "${MODULE_CONFIG_FILE_NAME}")
+      list(APPEND MODULE_CONFIG_LIST "${MODULE_CONFIG_FILE_NAME}")
+    endforeach()
   endforeach()
 
   list(REMOVE_DUPLICATES MODULE_CONFIG_LIST)
@@ -323,9 +333,12 @@ function(ProcessModuleConfigCopies target_name)
     COMMAND ${CMAKE_COMMAND} -E make_directory "${MODULE_CONFIG_BUILD_DIR}")
 
   foreach(MODULE_CONFIG_FILE ${MODULE_CONFIG_FILES})
+    ServerConfRuntimeName("${MODULE_CONFIG_FILE}" MODULE_CONFIG_RUNTIME_NAME)
     add_custom_command(TARGET ${target_name}
       POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODULE_CONFIG_FILE}" "${MODULE_CONFIG_BUILD_DIR}")
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${MODULE_CONFIG_FILE}"
+        "${MODULE_CONFIG_BUILD_DIR}/${MODULE_CONFIG_RUNTIME_NAME}")
   endforeach()
 endfunction()
 

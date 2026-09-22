@@ -7648,6 +7648,11 @@ static std::map<uint32 /*low guid*/, uint32 /*shopId*/> g_refundGossipState;
 
 bool GossipHello_ShopRefundNPC(Player* player, Creature* creature)
 {
+    // This custom gossip handler owns the initial response, so the normal
+    // gossip path never gets a chance to populate quest entries. Preserve
+    // quests attached to refund vendors (including the weekly quest givers).
+    player->PrepareQuestMenu(creature->GetObjectGuid());
+
     player->ADD_GOSSIP_ITEM(GOSSIP_ICON_VENDOR, "Trade", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_TRADE);
 
     auto history = sObjectMgr.GetShopLogEntries(player->GetSession()->GetAccountId());

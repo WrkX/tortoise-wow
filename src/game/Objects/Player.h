@@ -722,6 +722,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOADAURAS,
     PLAYER_LOGIN_QUERY_LOADSPELLS,
     PLAYER_LOGIN_QUERY_LOADQUESTSTATUS,
+    PLAYER_LOGIN_QUERY_LOADWEEKLYQUESTS,
     PLAYER_LOGIN_QUERY_LOADHONORCP,
     PLAYER_LOGIN_QUERY_LOADPVPCURRENCY,
     PLAYER_LOGIN_QUERY_LOADREPUTATION,
@@ -1506,6 +1507,9 @@ class Player final: public Unit
         ObjectGuid m_dividerGuid;
         uint32 m_ingametime;
         QuestStatusMap mQuestStatus;
+        // Last reserved period for each weekly quest. The reservation is
+        // persisted before a reward can be applied.
+        std::unordered_map<uint32, uint64> m_weeklyQuestPeriods;
         void AdjustQuestReqItemCount(Quest const* pQuest, QuestStatusData& questStatusData);
         bool CanGiveQuestSourceItemIfNeed(Quest const* pQuest, ItemPosCountVec* dest = nullptr) const;
         void GiveQuestSourceItemIfNeed(Quest const* pQuest);
@@ -1571,6 +1575,8 @@ class Player final: public Unit
         const QuestStatusData* GetQuestStatusData(uint32 quest_id) const;
         QuestStatus GetQuestStatus(uint32 quest_id) const;
         void SetQuestStatus(uint32 quest_id, QuestStatus status);
+        bool IsWeeklyQuestEligible(Quest const* pQuest) const;
+        void _LoadWeeklyQuestLedger(QueryResult* result);
 
         void SwapQuestSlot(uint16 slot1,uint16 slot2)
         {

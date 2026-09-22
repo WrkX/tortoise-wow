@@ -29,6 +29,7 @@ DELETE character_instance FROM character_instance INNER JOIN character_temp_dele
 DELETE character_account_data FROM character_account_data INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_account_data.guid;
 DELETE character_homebind FROM character_homebind INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_homebind.guid;
 DELETE character_queststatus FROM character_queststatus INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_queststatus.guid;
+DELETE character_weekly_quest FROM character_weekly_quest INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_weekly_quest.guid;
 DELETE character_item_logs FROM character_item_logs INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_item_logs.guid;
 DELETE character_inventory FROM character_inventory INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_inventory.guid;
 DELETE character_reputation FROM character_reputation INNER JOIN character_temp_deletion_guids ON character_temp_deletion_guids.guid = character_reputation.guid;

@@ -3760,6 +3760,23 @@ void ObjectMgr::LoadQuests()
         if (qinfo->m_SpecialFlags > QUEST_SPECIAL_FLAG_DB_ALLOWED)
             sLog.outErrorDb("Quest %u has `SpecialFlags` = %u, above max flags not allowed for database.", qinfo->GetQuestId(), qinfo->m_SpecialFlags);
 
+        if (qinfo->HasSpecialFlag(QUEST_SPECIAL_FLAG_DAILY) && qinfo->IsWeekly())
+        {
+            // A quest cannot have two cadence owners. Keep the established
+            // daily behavior and reject only the newly-invalid weekly bit.
+            sLog.outErrorDb("Quest %u has both daily and weekly SpecialFlags; weekly flag ignored.", qinfo->GetQuestId());
+            qinfo->m_SpecialFlags &= ~QUEST_SPECIAL_FLAG_WEEKLY;
+        }
+
+        if (qinfo->IsWeekly() && !qinfo->IsRepeatable())
+        {
+            // Weekly rewards are a cadence on top of the repeatable quest
+            // lifecycle. Repair legacy/mistyped templates in memory rather
+            // than allowing the first reward to make them permanently done.
+            sLog.outErrorDb("Quest %u has WEEKLY without REPEATABLE; REPEATABLE flag added in memory.", qinfo->GetQuestId());
+            qinfo->SetSpecialFlag(QUEST_SPECIAL_FLAG_REPEATABLE);
+        }
+
         if (qinfo->HasQuestFlag(QUEST_FLAGS_AUTO_REWARDED))
         {
             // at auto-reward can be rewarded only RewChoiceItemId[0]

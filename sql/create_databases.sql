@@ -684,6 +684,18 @@ CREATE TABLE `character_queststatus` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `character_weekly_quest`
+--
+
+DROP TABLE IF EXISTS `character_weekly_quest`;
+CREATE TABLE `character_weekly_quest` (
+  `guid` int(10) unsigned NOT NULL DEFAULT 0 COMMENT 'Global Unique Identifier',
+  `quest` int(10) unsigned NOT NULL DEFAULT 0 COMMENT 'Quest Identifier',
+  `completed_period` bigint(20) unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`guid`,`quest`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci ROW_FORMAT=DYNAMIC COMMENT='Per-character weekly quest completion';
+
+--
 -- Table structure for table `character_reputation`
 --
 
