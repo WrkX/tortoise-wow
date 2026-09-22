@@ -74,7 +74,12 @@ schema in `ai_playerbot_ahbot_market_stats.sql`:
   `(item_id, suffix_id, 0)`
 - `ahbot_listing_stats`: shared item snapshot presence and listing volume
 - `ahbot_market_snapshot_source`: one provenance row per input snapshot
-- `ahbot_price`: optional unsuffixed median price for the legacy runtime lookup
+- `ahbot_price`: unsuffixed median-price fallback when percentile data is not
+  usable for an item
+
+For complete, non-empty source rows, the largest `parsed_listings` value also
+defines AHBot's daily population ceiling. The runtime rolls one shared target
+from the fixed 5,000-auction floor through that imported maximum.
 
 Required price columns are `sample_count`, `price_min`, `price_p10`,
 `price_p25`, `price_median`, `price_p75`, `price_p90`, and `price_max`.

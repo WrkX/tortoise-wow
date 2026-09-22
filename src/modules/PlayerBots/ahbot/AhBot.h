@@ -64,6 +64,9 @@ namespace ahbot
         std::map<uint32, uint64> historyBidSum; // key: faction * 10 + won
         std::map<uint32, uint32> lastSelfBuyTime; // faction
         std::map<uint32, int64> availableMoney;
+        uint32 sampleMinListings = 0;
+        uint32 sampleMaxListings = 0;
+        uint32 sourceSnapshotRows = 0;
         size_t priceStatRows = 0;
         size_t listingStatRows = 0;
         size_t marketRows = 0;
@@ -89,7 +92,6 @@ namespace ahbot
 
     public:
         static bool HandleAhBotCommand(ChatHandler* handler, char const* args);
-        ObjectGuid GetAHBplayerGUID();
         void Init();
         void Update();
         void ForceUpdate(bool simulate = false);
@@ -153,9 +155,8 @@ namespace ahbot
         SellerPersona GetPersonaForBidder(uint32 guid) const;
         HouseSnapshotIndex BuildHouseIndex(const std::vector<AuctionSnapshot>& snaps) const;
         uint32 ResolveHouseTarget(int auction, uint32 currentCount);
-        uint32 GetHouseMinItems(int auction) const;
-        uint32 GetHouseMaxItems(int auction) const;
-        uint32 GetHouseTargetPercent(int auction) const;
+        uint32 GetHouseMinItems(int auction);
+        uint32 GetHouseMaxItems(int auction);
         uint32 ChooseListingStack(const ItemPrototype* proto, Category* category);
         uint32 ApplySellPriceAdjustments(const ItemPrototype* proto, uint32 unitPrice, uint32 owner, const HouseSnapshotIndex& index, Category* category, uint32 auctionHouse);
         void CommandReply(ChatHandler* handler, const std::string& line);

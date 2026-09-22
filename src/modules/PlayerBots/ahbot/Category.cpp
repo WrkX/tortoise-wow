@@ -22,9 +22,7 @@ PricingStrategy* Category::GetPricingStrategy()
     if (pricingStrategy)
         return pricingStrategy;
 
-    std::ostringstream out; out << "AhBot.PricingStrategy." << GetName();
-    std::string name = sAhBotConfig.GetStringDefault(out.str().c_str(), "default");
-    return pricingStrategy = PricingStrategyFactory::Create(name, this);
+    return pricingStrategy = new PricingStrategy(this);
 }
 
 QualityCategoryWrapper::QualityCategoryWrapper(Category* category, uint32 quality) : Category(), quality(quality), category(category)

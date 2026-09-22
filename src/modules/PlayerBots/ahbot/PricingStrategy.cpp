@@ -38,7 +38,7 @@ double PricingStrategy::CalculatePrice(std::ostringstream *explain, ...)
 
 uint32 PricingStrategy::GetSellPrice(ItemPrototype const* proto, uint32 auctionHouse, bool ignoreMarket, std::ostringstream *explain)
 {
-    if (!ignoreMarket && sAhBotConfig.customPriceStatsEnabled)
+    if (!ignoreMarket)
     {
         PricePercentiles stats;
         if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))
@@ -111,7 +111,6 @@ double PricingStrategy::GetMarketPrice(uint32 itemId, uint32 auctionHouse)
 
 uint32 PricingStrategy::GetBuyPrice(ItemPrototype const* proto, uint32 auctionHouse, std::ostringstream *explain)
 {
-    if (sAhBotConfig.customPriceStatsEnabled)
     {
         PricePercentiles stats;
         if (auctionbot.TryGetPriceStats(proto->ItemId, auctionHouse, stats))

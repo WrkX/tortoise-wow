@@ -2,9 +2,7 @@
 
 #include "Config/Config.h"
 #include "AhBotEconomy.h"
-#include <map>
 #include <set>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -25,7 +23,6 @@ public:
     bool enabled;
     bool sellerEnabled;
     bool buyerEnabled;
-    uint64 guid;
     uint32 updateInterval;
     uint32 historyDays, maxSellInterval;
     uint32 itemBuyMinInterval, itemBuyMaxInterval;
@@ -40,16 +37,10 @@ public:
     bool sendmail;
 
     uint32 itemsPerCycle;
-    uint32 sharedMinItems, sharedMaxItems, sharedTargetPercent;
-    uint32 allianceMinItems, allianceMaxItems, allianceTargetPercent;
-    uint32 hordeMinItems, hordeMaxItems, hordeTargetPercent;
-    uint32 neutralMinItems, neutralMaxItems, neutralTargetPercent;
 
-    bool customPriceStatsEnabled;
     uint32 customPriceStatsMinSampleCount;
     uint32 customPriceStatsBuyerMaxAcceptedPercentile;
 
-    bool listingStatsEnabled;
     uint32 listingStatsMinSeenCount;
     float listingStatsFallbackWeight;
     float listingStatsScarcityExponent;
@@ -85,123 +76,65 @@ public:
     uint32 listingExpireMaxSeconds;
     bool realismDebug;
 
-    float GetSellPriceMultiplier(std::string category)
+    float GetSellPriceMultiplier(std::string)
     {
-        return GetCategoryParameter(sellPriceMultipliers, "PriceMultiplier.Sell", category, 1.0f);
+        return 1.0f;
     }
 
-    float GetBuyPriceMultiplier(std::string category)
+    float GetBuyPriceMultiplier(std::string)
     {
-        return GetCategoryParameter(buyPriceMultipliers, "PriceMultiplier.Buy", category, 1.0f);
+        return 1.0f;
     }
 
-    float GetItemPriceMultiplier(std::string name)
+    float GetItemPriceMultiplier(std::string)
     {
-        return GetCategoryParameter(itemPriceMultipliers, "PriceMultiplier.Item", name, 1.0f);
+        return 1.0f;
     }
 
-    int32 GetMaxAllowedAuctionCount(std::string category, int32 default_value)
+    int32 GetMaxAllowedAuctionCount(std::string, int32)
     {
-        return (int32)GetCategoryParameter(maxAuctionCount, "MaxAuctionCount", category, default_value);
+        // Total market population is the only listing-volume control. A fixed
+        // per-bucket ceiling keeps a single category from consuming it all.
+        return 30;
     }
 
-    int32 GetMaxAllowedItemAuctionCount(std::string category, int32 default_value)
+    int32 GetMaxAllowedItemAuctionCount(std::string, int32 default_value)
     {
-        return (int32)GetCategoryParameter(maxItemAuctionCount, "MaxItemTypeCount", category, default_value);
+        return default_value;
     }
 
-    int32 GetListProportion(std::string category)
+    int32 GetListProportion(std::string)
     {
-        return (int32)GetCategoryParameter(listProportions, "ListProportion", category, 0.0f);
+        return 0;
     }
 
-    int32 GetMaxActiveForCategory(std::string category)
+    int32 GetMaxActiveForCategory(std::string)
     {
-        return (int32)GetCategoryParameter(maxActiveByCategory, "MaxActive", category, (float)maxActiveDefault);
+        return maxActiveDefault;
     }
 
-    int32 GetEmptyMarketChance(std::string category)
+    int32 GetEmptyMarketChance(std::string)
     {
-        return (int32)GetCategoryParameter(emptyMarketChance, "DynamicSupply.EmptyMarketChance", category, 0.0f);
+        return 0;
     }
 
-    int32 GetStackRatio(std::string classKey)
+    int32 GetStackRatio(std::string)
     {
-        return (int32)GetCategoryParameter(stackRatio, "Stack.RandomRatio", classKey, 0.0f);
+        return 0;
     }
 
-    int32 GetStackIncrement(std::string classKey)
+    int32 GetStackIncrement(std::string)
     {
-        return (int32)GetCategoryParameter(stackIncrement, "Stack.Increment", classKey, 1.0f);
+        return 1;
     }
 
-    int32 GetStackMax(std::string classKey)
+    int32 GetStackMax(std::string)
     {
-        return (int32)GetCategoryParameter(stackMax, "Stack.Max", classKey, 0.0f);
-    }
-
-    std::string GetStringDefault(const char* name, const char* def)
-    {
-        return config.GetStringDefault(name, def);
-    }
-
-    bool GetBoolDefault(const char* name, const bool def = false)
-    {
-        return config.GetBoolDefault(name, def);
-    }
-
-    int32 GetIntDefault(const char* name, const int32 def)
-    {
-        return config.GetIntDefault(name, def);
-    }
-
-    float GetFloatDefault(const char* name, const float def)
-    {
-        return config.GetFloatDefault(name, def);
-    }
-
-    void ParseMinMax(const std::string& value, uint32& outMin, uint32& outMax, uint32 defaultValue);
-
-private:
-    float GetCategoryParameter(std::map<std::string, float>& cache, std::string type, std::string category, float defaultValue)
-    {
-        if (cache.find(category) == cache.end())
-        {
-            std::ostringstream out; out << "AhBot."<< type << "." << category;
-            cache[category] = config.GetFloatDefault(out.str().c_str(), defaultValue);
-        }
-
-        return cache[category];
-    }
-
-    void ClearCategoryCaches()
-    {
-        sellPriceMultipliers.clear();
-        buyPriceMultipliers.clear();
-        itemPriceMultipliers.clear();
-        maxAuctionCount.clear();
-        maxItemAuctionCount.clear();
-        listProportions.clear();
-        maxActiveByCategory.clear();
-        emptyMarketChance.clear();
-        stackRatio.clear();
-        stackIncrement.clear();
-        stackMax.clear();
+        return 0;
     }
 
 private:
     Config config;
-    std::map<std::string, float> sellPriceMultipliers;
-    std::map<std::string, float> buyPriceMultipliers;
-    std::map<std::string, float> itemPriceMultipliers;
-    std::map<std::string, float> maxAuctionCount;
-    std::map<std::string, float> maxItemAuctionCount;
-    std::map<std::string, float> listProportions;
-    std::map<std::string, float> maxActiveByCategory;
-    std::map<std::string, float> emptyMarketChance;
-    std::map<std::string, float> stackRatio;
-    std::map<std::string, float> stackIncrement;
-    std::map<std::string, float> stackMax;
 };
 
 #define sAhBotConfig MaNGOS::Singleton<AhBotConfig>::Instance()

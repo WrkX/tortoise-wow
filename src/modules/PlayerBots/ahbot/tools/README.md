@@ -66,7 +66,7 @@ rows untouched. The default emits `TRUNCATE` for the three stats/provenance
 tables, then the same upserts (idempotent if re-applied).
 
 Unsuffixed medians are also written to `ahbot_price` (DELETE + INSERT per
-item/house) so the current runtime `GetMarketPrice` query can use them. Pass
+item/house) as the price fallback for items without usable percentile data. Pass
 `--no-ahbot-price` to skip that. Suffixed items are stats-only.
 
 ## Snapshot SQL
@@ -124,12 +124,13 @@ is the number of source snapshots in the shared market.
 
 ## Daily population target
 
-Set `AhBot.Shared.MinItems` and `AhBot.Shared.MaxItems` to configure one daily
-market target. The server rolls and persists one target in
-`ahbot_house_target` (house `0`), then fills the combined physical houses
-toward it. `ItemsPerCycle`, category/item caps, expiration, and seller cooldowns
-remain additional safeguards. Legacy per-house settings are used only when
-the shared range is left at `0/0`.
+The server rolls one daily target from **5,000** through the largest
+`parsed_listings` value from complete snapshot sources, and persists it in
+`ahbot_house_target` (house `0`). It then fills the combined physical houses
+toward that target. The fixed floor prevents sparse but complete samples from
+setting an impractically low market population. `ItemsPerCycle` is the only
+rate control; category shape, pricing, and scarcity are fixed runtime policy
+driven by this import.
 
 ## Tests
 
