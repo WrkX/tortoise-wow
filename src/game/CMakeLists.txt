@@ -49,7 +49,10 @@ set (game_SRCS
     StatSystem.cpp
     TransmogMgr.cpp
     UnitAuraProcHandler.cpp
+    WeeklyResetSchedule.cpp
+    WeeklyResetRuntime.cpp
     Weather.cpp
+    WeeklyQuestLedger.cpp
     World.cpp
     WorldSession.cpp
     AI/AbilityTimer.cpp

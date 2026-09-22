@@ -48,6 +48,7 @@ static DumpTable dumpTables[] =
     { "character_honor_cp",               DTT_CHAR_TABLE },
     { "character_inventory",              DTT_INVENTORY  }, // -> item guids
     { "character_queststatus",            DTT_CHAR_TABLE },
+    { "character_weekly_quest",            DTT_CHAR_TABLE },
     { "character_pet",                    DTT_PET        }, // -> pet number
     { "character_reputation",             DTT_CHAR_TABLE },
     { "character_skills",                 DTT_CHAR_TABLE },

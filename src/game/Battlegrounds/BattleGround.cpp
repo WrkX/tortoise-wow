@@ -23,6 +23,7 @@
 #include "Player.h"
 #include "BattleGround.h"
 #include "BattleGroundMgr.h"
+#include "WeeklyQuestContent.h"
 #include "Creature.h"
 #include "MapManager.h"
 #include "Language.h"
@@ -788,6 +789,10 @@ void BattleGround::EndBattleGround(Team winner)
         //   This was reverted and will stay reverted for now.
         else
             RewardMark(pPlayer, false);
+
+        // A completed battleground counts regardless of the winning team; arenas do not.
+        if (!IsArena())
+            pPlayer->KilledMonsterCredit(WeeklyQuestContent::BattlegroundMatchCredit);
 
         pPlayer->CombatStopWithPets(true);
 

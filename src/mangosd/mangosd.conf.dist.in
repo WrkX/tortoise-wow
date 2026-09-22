@@ -37,10 +37,10 @@ HardcoreModeLogFile = "hardcore.log"
 
 # Database.Info. Database connection settings for the world server.
 
-LoginDatabase.Info = "127.0.0.1;3306;mangos;mangos;tw_logon"
-WorldDatabase.Info = "127.0.0.1;3306;mangos;mangos;tw_world"
-CharacterDatabase.Info = "127.0.0.1;3306;mangos;mangos;tw_char"
-LogsDatabase.Info = "127.0.0.1;3306;mangos;mangos;tw_logs"
+LoginDatabase.Info = "127.0.0.1;3307;mangos;mangos;tw_logon"
+WorldDatabase.Info = "127.0.0.1;3307;mangos;mangos;tw_world"
+CharacterDatabase.Info = "127.0.0.1;3307;mangos;mangos;tw_char"
+LogsDatabase.Info = "127.0.0.1;3307;mangos;mangos;tw_logs"
 
 # DB Auto-updater
 

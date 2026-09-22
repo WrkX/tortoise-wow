@@ -122,7 +122,7 @@ set_target_properties(${EXECUTABLE_NAME} PROPERTIES LINK_FLAGS
 )
 
 install(TARGETS ${EXECUTABLE_NAME} DESTINATION ${BIN_DIR})
-install(FILES realmd.conf.dist.in DESTINATION ${CONF_DIR} RENAME realmd.conf.dist)
+InstallServerConf(${CMAKE_CURRENT_SOURCE_DIR}/realmd.conf.dist.in ${CONF_DIR})
 
 if(WIN32 AND MSVC)
   # Every configuration, not just Debug: a Release minidump needs the symbols

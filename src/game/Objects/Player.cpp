@@ -24,6 +24,7 @@
 #include <cmath>
 #include <iostream>
 #include <ctime>
+#include <mutex>
 
 #include "Player.h"
 #include "Language.h"
@@ -32,6 +33,8 @@
 #include "Opcodes.h"
 #include "SpellMgr.h"
 #include "World.h"
+#include "WeeklyQuestLedger.h"
+#include "WeeklyQuestContent.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "UpdateMask.h"
@@ -61,6 +64,7 @@
 #include "BattleGroundAV.h"
 #include "BattleGroundSV.h"
 #include "BattleGroundMgr.h"
+
 #include "Chat.h"
 #include "Database/DatabaseImpl.h"
 #include "Spell.h"
@@ -76,6 +80,14 @@
 #include "Config/Config.h"
 #include "ZoneScript.h"
 #include "ZoneScriptMgr.h"
+
+namespace
+{
+    // Quest packets for one character are normally serialized by the session
+    // queue. Keep a small server-side guard as a second line of defense for
+    // bot/script callers that can invoke rewards concurrently.
+    std::mutex s_weeklyQuestRewardMutex;
+}
 
 // Player-scoped variant of SC_PHASE — stamps the current thread's last-known
 // phase into TLS read by mangosd's crash handler. Symbols defined in
@@ -5741,6 +5753,7 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             CharacterDatabase.PExecute("DELETE FROM group_instance WHERE leaderGuid = '%u'", lowguid);
             CharacterDatabase.PExecute("DELETE FROM character_inventory WHERE guid = '%u'", lowguid);
             CharacterDatabase.PExecute("DELETE FROM character_queststatus WHERE guid = '%u'", lowguid);
+            CharacterDatabase.PExecute("DELETE FROM character_weekly_quest WHERE guid = '%u'", lowguid);
             CharacterDatabase.PExecute("DELETE FROM character_reputation WHERE guid = '%u'", lowguid);
             CharacterDatabase.PExecute("DELETE FROM character_skills WHERE guid = '%u'", lowguid);
             CharacterDatabase.PExecute("DELETE FROM character_forgotten_skills WHERE guid = '%u'", lowguid);
@@ -14737,6 +14750,9 @@ bool Player::CanSeeStartQuest(Quest const *pQuest) const
 
 bool Player::CanTakeQuest(Quest const *pQuest, bool msg, bool skipStatusCheck /*false*/) const
 {
+    if (pQuest->IsWeekly() && !IsWeeklyQuestEligible(pQuest))
+        return false;
+
     if (pQuest->GetMaxLevel() && pQuest->GetMaxLevel() < GetLevel())
         return false;
 
@@ -14874,6 +14890,13 @@ bool Player::CanCompleteRepeatableQuest(Quest const *pQuest) const
 
 bool Player::CanRewardQuest(Quest const *pQuest, bool msg) const
 {
+    if (pQuest->IsWeekly() && !IsWeeklyQuestEligible(pQuest))
+    {
+        if (msg)
+            SendCanTakeQuestResponse(INVALIDREASON_DONT_HAVE_REQ);
+        return false;
+    }
+
     if (!SatisfyQuestChallenges(pQuest, msg))
         return false;
 
@@ -15265,6 +15288,34 @@ void Player::RewardQuest(Quest const *pQuest, uint32 reward, WorldObject* questE
 {
     uint32 quest_id = pQuest->GetQuestId();
 
+    // Reserve the period durably before applying any reward. Legacy character
+    // tables use mixed storage engines, so the ledger cannot be made atomic
+    // with the full character save. Keeping a successful reservation even if
+    // that save later fails prevents a duplicate economy payout.
+    const bool weeklyReward = pQuest->IsWeekly();
+    if (weeklyReward)
+    {
+        std::lock_guard<std::mutex> weeklyRewardLock(s_weeklyQuestRewardMutex);
+        const uint64 weeklyPeriod = WeeklyQuestLedger::GetCurrentPeriod(sWorld.GetGameTime());
+        if (!weeklyPeriod)
+        {
+            sLog.outError("Player::RewardQuest: weekly reward refused because the reset schedule is invalid (player %u, quest %u).", GetGUIDLow(), quest_id);
+            return;
+        }
+
+        if (!IsWeeklyQuestEligible(pQuest))
+            return;
+
+        if (!WeeklyQuestLedger::RecordCompletion(GetGUIDLow(), quest_id, weeklyPeriod))
+        {
+            sLog.outError("Player::RewardQuest: failed to reserve weekly reward (player %u, quest %u, period " UI64FMTD ").",
+                GetGUIDLow(), quest_id, weeklyPeriod);
+            return;
+        }
+
+        m_weeklyQuestPeriods[quest_id] = weeklyPeriod;
+    }
+
     for (int i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
     {
         if (pQuest->ReqItemId[i])
@@ -15462,6 +15513,16 @@ void Player::RewardQuest(Quest const *pQuest, uint32 reward, WorldObject* questE
     {
         AwardTitle(TITLE_SEEKER_OF_KNOWLEDGE);
         sWorld.SendWorldText(50305, GetName());
+    }
+
+    if (weeklyReward)
+    {
+        // Bypass delayed teleport saves and wait for the database result. If
+        // this fails, keep the durable reservation and the in-memory reward;
+        // a later normal save may recover it without enabling another claim.
+        if (!SaveToDB(true, true, true))
+            sLog.outError("Player::RewardQuest: weekly reward state could not be saved; reservation retained to prevent a duplicate payout (player %u, quest %u).",
+                GetGUIDLow(), quest_id);
     }
 }
 
@@ -16183,6 +16244,9 @@ void Player::KilledMonster(CreatureInfo const* cInfo, ObjectGuid guid)
                 {
                     script->OnCreatureKill(this, creature);
                 });
+
+                if (map->IsRaid() && creature->IsWorldBoss())
+                    KilledMonsterCredit(WeeklyQuestContent::RaidBossCredit, guid);
             }
         }
 
@@ -17161,6 +17225,7 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder *holder)
 
     // after spell load, learn rewarded spell if need also
     _LoadQuestStatus(holder->GetResult(PLAYER_LOGIN_QUERY_LOADQUESTSTATUS));
+    _LoadWeeklyQuestLedger(holder->GetResult(PLAYER_LOGIN_QUERY_LOADWEEKLYQUESTS));
 
     // must be before inventory (some items required reputation check)
     m_reputationMgr.LoadFromDB(holder->GetResult(PLAYER_LOGIN_QUERY_LOADREPUTATION));
@@ -18013,6 +18078,42 @@ void Player::_LoadQuestStatus(QueryResult *result)
         SetQuestSlot(i, 0);
 }
 
+void Player::_LoadWeeklyQuestLedger(QueryResult* result)
+{
+    m_weeklyQuestPeriods.clear();
+
+    if (!result)
+        return;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        const uint32 questId = fields[0].GetUInt32();
+        if (Quest const* quest = sObjectMgr.GetQuestTemplate(questId))
+        {
+            if (quest->IsWeekly())
+                m_weeklyQuestPeriods[questId] = fields[1].GetUInt64();
+        }
+        else
+            sLog.outError("Character %u has weekly ledger entry for missing quest %u.", GetGUIDLow(), questId);
+    }
+    while (result->NextRow());
+}
+
+bool Player::IsWeeklyQuestEligible(Quest const* pQuest) const
+{
+    if (!pQuest || !pQuest->IsWeekly())
+        return true;
+
+    const uint64 currentPeriod = WeeklyQuestLedger::GetCurrentPeriod(sWorld.GetGameTime());
+    if (!currentPeriod)
+        return false;
+
+    auto itr = m_weeklyQuestPeriods.find(pQuest->GetQuestId());
+    return itr == m_weeklyQuestPeriods.end() ||
+           itr->second != currentPeriod;
+}
+
 void Player::_LoadSpells(QueryResult *result)
 {
     //QueryResult *result = CharacterDatabase.PQuery("SELECT spell,active,disabled FROM character_spell WHERE guid = '%u'",GetGUIDLow());
@@ -18601,12 +18702,18 @@ bool Player::SaveToDB(bool online, bool force, bool direct)
     if (direct)
     {
         if (!uberInsert.DirectExecute())
+        {
+            CharacterDatabase.RollbackTransaction();
             return false;
+        }
     }
     else
     {
         if (!uberInsert.Execute())
+        {
+            CharacterDatabase.RollbackTransaction();
             return false;
+        }
     }
 
     _SaveBGData();

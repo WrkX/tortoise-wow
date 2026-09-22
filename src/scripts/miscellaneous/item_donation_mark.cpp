@@ -80,9 +80,10 @@ bool ItemUse_item_donation_mark(Player* player, Item* item, SpellCastTargets& /*
     player->DestroyItemCount(item, count, true);
     player->SaveInventoryAndGoldToDB();
 
-    sLog.outString("[DONATION] Player %u on account %u redeemed item %u for %u points.",
+    sLog.outString("[Marks of the Ranger General] Player %u on account %u redeemed item %u for %u points.",
         player->GetGUIDLow(), accountId, item->GetEntry(), points);
-    player->GetSession()->SendNotification("You redeemed %u Donation Point(s).", points);
+    player->GetSession()->SendNotification("You redeemed a Mark of the Ranger General for %u Donation Point%s.",
+        points, points == 1 ? "" : "s");
 
     return true;
 }

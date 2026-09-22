@@ -191,6 +191,16 @@ if(WIN32)
   # The same components as below: filesystem and thread need linked libraries;
   # Boost.System is header-only since 1.69 and no longer ships a stub lib in
   # 1.89+, so do not list "system" in find_package (FindBoost would fail).
+  # This project uses a locally-built Boost tree rather than Boost's CMake
+  # package configuration.  State the required legacy FindBoost behavior so
+  # CMake 3.30+ does not emit CMP0167 developer warnings.
+  if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+  endif()
+  # CMake's legacy finder does not yet know Boost 1.91's dependency map.
+  # The requested thread and filesystem targets are present and validated by
+  # the link step, so avoid a non-actionable warning during every configure.
+  set(Boost_NO_WARN_NEW_VERSIONS ON)
   find_package(Boost 1.70 REQUIRED COMPONENTS thread filesystem)
   target_link_libraries(${LIBRARY_NAME}
     PRIVATE zlib
@@ -244,13 +254,13 @@ endif()
 if (NOT CONF_INSTALL_DIR)
   set(CONF_INSTALL_DIR ${CONF_DIR})
 endif()
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/aiplayerbot.conf.dist DESTINATION ${CONF_INSTALL_DIR})
+InstallServerConf(${CMAKE_CURRENT_BINARY_DIR}/aiplayerbot.conf.dist ${CONF_INSTALL_DIR})
 
 # AhBotConfig.cpp reads SYSCONFDIR"ahbot.conf", but the template was never
 # generated or installed, so AHBot could not be switched on from a clean
 # install at all - it just logs that it cannot open the file and stays off.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ahbot/ahbot.conf.dist.in ${CMAKE_CURRENT_BINARY_DIR}/ahbot.conf.dist)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ahbot.conf.dist DESTINATION ${CONF_INSTALL_DIR})
+InstallServerConf(${CMAKE_CURRENT_BINARY_DIR}/ahbot.conf.dist ${CONF_INSTALL_DIR})
 
 set_target_properties(${LIBRARY_NAME} PROPERTIES PROJECT_LABEL "PlayerBots")
 
