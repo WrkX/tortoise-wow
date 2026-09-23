@@ -53,9 +53,10 @@ public:
     static void Init();
     void Refresh();
     void Randomize(bool incremental, bool syncWithMaster);
-    // Fully prepare a freshly-created bot at its existing level without
-    // changing that level or depending on random-bot configuration switches.
-    void InitializeAtCurrentLevel();
+    // Prepare a bot at its existing level without changing that level or
+    // depending on random-bot configuration switches. When requested, use the
+    // AI master's gear score to cap newly generated equipment.
+    void InitializeAtCurrentLevel(bool syncGearWithMaster = false);
     static std::list<uint32> classQuestIds;
     static std::list<uint32> specialQuestIds;
     void InitSkills();

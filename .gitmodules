@@ -4,15 +4,15 @@
 
 [submodule "modules/mod-crafting-storage"]
 	path = modules/mod-crafting-storage
-	url = https://github.com/WrkX/mod-reagent-bank.git
+	url = https://github.com/WindrunnerWoW/windrunner-crafting-storage.git
 
 [submodule "src/modules/GroupQuestLoot"]
 	path = src/modules/GroupQuestLoot
-	url = https://github.com/WrkX/tortoise-group-quest-loot.git
+	url = https://github.com/WindrunnerWoW/windrunner-group-quest-loot.git
 
 [submodule "modules/mod-crafting-orders"]
 	path = modules/mod-crafting-orders
-	url = https://github.com/WrkX/mod-crafting-orders.git
+	url = https://github.com/WindrunnerWoW/windrunner-crafting-orders.git
 	branch = main
 
 [submodule "modules/mod-companion-recruiter"]

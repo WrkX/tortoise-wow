@@ -373,7 +373,7 @@ void PlayerbotFactory::Randomize(bool incremental, bool syncWithMaster)
     pmo.reset();
 }
 
-void PlayerbotFactory::InitializeAtCurrentLevel()
+void PlayerbotFactory::InitializeAtCurrentLevel(bool syncGearWithMaster)
 {
     InitBags();
     InitAvailableSpells();
@@ -383,11 +383,12 @@ void PlayerbotFactory::InitializeAtCurrentLevel()
     AutoLearnSpellAction learner(ai);
     learner.LearnLevelAppropriateSpells();
     UpdateTradeSkills();
+    ai->DoSpecificAction("auto talents");
 
     if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
         LoadEnchantContainer();
 
-    InitEquipment(false, false);
+    InitEquipment(false, syncGearWithMaster);
     InitGems();
     InitAmmo();
     InitFood();
