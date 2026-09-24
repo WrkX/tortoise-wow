@@ -2108,6 +2108,27 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
             std::string name, chanName, message;
             p >> msgtype >> lang;
 
+            auto readChatPayload = [&]() -> bool
+            {
+                if (p.size() - p.rpos() < sizeof(textLen))
+                    return false;
+
+                p >> textLen;
+
+                size_t const remaining = p.size() - p.rpos();
+                if (!textLen || textLen > remaining || remaining - textLen < sizeof(chatTag))
+                    return false;
+
+                std::string text(textLen, '\0');
+                p.read(reinterpret_cast<uint8*>(&text[0]), textLen);
+                if (text.back() != '\0' || text.find('\0') != textLen - 1)
+                    return false;
+
+                message.assign(text.data(), textLen - 1);
+                p >> chatTag;
+                return true;
+            };
+
             // filter msg type
             switch (msgtype)
             {
@@ -2145,7 +2166,8 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
             if (guid1.IsEmpty() || p.size() > 0x1000)
                 return;
 
-            p >> textLen >> message >> chatTag;
+            if (!readChatPayload())
+                return;
 #endif
 #ifdef MANGOSBOT_ONE
             p >> guid1 >> unused;
@@ -2163,7 +2185,8 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
             case CHAT_MSG_WHISPER:
             case CHAT_MSG_GUILD:
                 p >> guid2;
-                p >> textLen >> message >> chatTag;
+                if (!readChatPayload())
+                    return;
                 break;
             default:
                 break;
@@ -2192,12 +2215,16 @@ void PlayerbotAI::HandleBotOutgoingPacket(const WorldPacket& packet)
             case CHAT_MSG_WHISPER:
             case CHAT_MSG_GUILD:
                 p >> guid2;
-                p >> textLen >> message >> chatTag;
+                if (!readChatPayload())
+                    return;
                 break;
             default:
                 break;
             }
 #endif
+
+            if (message.empty())
+                return;
 
             bool isAiChat = sPlayerbotAIConfig.llmEnabled > 0 && (HasStrategy("ai chat", BotState::BOT_STATE_NON_COMBAT) || sPlayerbotAIConfig.llmEnabled == 3);
 

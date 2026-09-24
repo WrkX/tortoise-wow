@@ -17,6 +17,8 @@
 
 #include "playerbot/playerbot.h"
 #include "Objects/Player.h"
+#include "ByteBuffer.h"
+#include "Log.h"
 #include "World.h"
 #include "ScriptObjects.h"
 #include "ScriptMgr.h"
@@ -82,7 +84,15 @@ class PlayerbotServerScript : public ServerScript
             if (!ai)
                 return true;
 
-            ai->HandleBotOutgoingPacket(packet);
+            try
+            {
+                ai->HandleBotOutgoingPacket(packet);
+            }
+            catch (ByteBufferException const&)
+            {
+                sLog.outError("PlayerbotServerScript::CanPacketSend caught malformed outgoing packet (opcode: 0x%x).",
+                              packet.GetOpcode());
+            }
             return false;
         }
 
