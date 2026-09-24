@@ -206,6 +206,8 @@ ChatHelper::ChatHelper(PlayerbotAI* ai) : PlayerbotAIAware(ai)
     races[RACE_TAUREN] = "Tauren";
     races[RACE_TROLL] = "Troll";
     races[RACE_UNDEAD] = "Undead";
+    races[RACE_GOBLIN] = "Goblin";
+    races[RACE_HIGH_ELF] = "High Elf";
 #ifndef MANGOSBOT_ZERO
     races[RACE_BLOODELF] = "Blood Elf";
     races[RACE_DRAENEI] = "Draenei";
